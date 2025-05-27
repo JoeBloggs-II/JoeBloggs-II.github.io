@@ -80,8 +80,8 @@
             pbr.albedoColor = new BABYLON.Color3(1.0, 0.766, 0.336);
             pbr.metallic = 1.0; // set to 1 to only use it from the metallicRoughnessTexture
             pbr.roughness = 1.0; // set to 1 to only use it from the metallicRoughnessTexture
-            pbr.reflectionTexture = BABYLON.CubeTexture.CreateFromPrefilteredData("/textures/environment.dds", scene);
-            pbr.metallicTexture = new BABYLON.Texture("/textures/mr.jpg", scene);
+            pbr.reflectionTexture = BABYLON.CubeTexture.CreateFromPrefilteredData("./textures/environment.dds", scene);
+            pbr.metallicTexture = new BABYLON.Texture("./textures/mr.jpg", scene);
             pbr.useRoughnessFromMetallicTextureAlpha = false;
             pbr.useRoughnessFromMetallicTextureGreen = true;
             pbr.useMetallnessFromMetallicTextureBlue = true;

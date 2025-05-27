@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mandelbrot Explorer</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+let width, height;
+
+let zoom = 200;
+let offsetX = -canvas.width / 2;
+let offsetY = -canvas.height / 2;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  width = canvas.width;
+  height = canvas.height;
+  draw();
+}
+window.addEventListener("resize", resize);
+resize();
+
+function draw() {
+  const imgData = ctx.createImageData(width, height);
+  const data = imgData.data;
+  const maxIter = 100;
+
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      let x0 = (px + offsetX - width / 2) / zoom;
+      let y0 = (py + offsetY - height / 2) / zoom;
+      let x = 0, y = 0;
+      let iter = 0;
+
+      while (x * x + y * y <= 4 && iter < maxIter) {
+        const xtemp = x * x - y * y + x0;
+        y = 2 * x * y + y0;
+        x = xtemp;
+        iter++;
+      }
+
+      const index = 4 * (py * width + px);
+      const color = iter === maxIter ? 0 : 255 - iter * 5;
+      data[index] = color;      // R
+      data[index + 1] = 0;      // G
+      data[index + 2] = 255;    // B
+      data[index + 3] = 255;    // A
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
+
+canvas.addEventListener("wheel", e => {
+  const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+  const mx = e.offsetX;
+  const my = e.offsetY;
+  offsetX = mx + (offsetX - mx) * zoomFactor;
+  offsetY = my + (offsetY - my) * zoomFactor;
+  zoom *= zoomFactor;
+  draw();
+});
+
+let lastX, lastY;
+canvas.addEventListener("mousedown", e => {
+  lastX = e.clientX;
+  lastY = e.clientY;
+  canvas.onmousemove = e2 => {
+    offsetX += e2.clientX - lastX;
+    offsetY += e2.clientY - lastY;
+    lastX = e2.clientX;
+    lastY = e2.clientY;
+    draw();
+  };
+});
+canvas.addEventListener("mouseup", () => canvas.onmousemove = null);
+</script>
+</body>
+</html>

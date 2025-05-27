@@ -34,8 +34,8 @@
   void main() {
     vec2 c = (gl_FragCoord.xy - u_resolution / 2.0) / u_zoom + u_offset;
     vec2 z = vec2(0.0);
-    int i;
-    for (i = 0; i < u_maxIter; i++) {
+    int i = 0;
+    for (; i < u_maxIter; i++) {
       z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
       if (dot(z, z) > 4.0) break;
     }
@@ -101,7 +101,20 @@
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const beforeZoom = {
+      x: (mouseX - canvas.width / 2) / zoom + offset.x,
+      y: (mouseY - canvas.height / 2) / zoom + offset.y
+    };
     zoom *= zoomFactor;
+    const afterZoom = {
+      x: (mouseX - canvas.width / 2) / zoom + offset.x,
+      y: (mouseY - canvas.height / 2) / zoom + offset.y
+    };
+    offset.x += beforeZoom.x - afterZoom.x;
+    offset.y += beforeZoom.y - afterZoom.y;
   });
 
   canvas.addEventListener("mousedown", (e) => {

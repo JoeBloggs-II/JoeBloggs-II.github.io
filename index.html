@@ -1,53 +1,111 @@
- <!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-<title>My Space</title>
- <style>
-  @import url("https://fonts.googleapis.com/css2?family=Source+Sans+Pro&display=swap");
-
-  :root {
-   --bg: lightblue;
-   --text: yellow;
-  }
-  
-  a {
-   color: var(--text);
-  }
-  
-  body {
-   background-color: var(--bg);
-   color: var(--text);
-  }
-
-  @media (prefers-color-scheme: dark) {
-   :root {
-    --bg: #0baaff;
-    --text: purple;
-   }
-  }
-  
- </style>
-<link rel="icon" type="image/x-icon" href="/images/IMG_1421.png">
-  <meta name="description" content="My Personal Online W3schools space">
-  <meta name="keywords" content="myspace,MySpace,My Space,my space,myspace-2468,MySpace-2468,My Space-2468">
-  <meta name="author" content="Joe Bloggs">
+  <meta charset="UTF-8">
+  <title>My Space</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="My Personal Online W3Schools Space">
+  <meta name="keywords" content="myspace,My Space,myspace-2468">
+  <meta name="author" content="Joe Bloggs">
   <meta name="google-site-verification" content="4VoNPxm8FU5GsdYKobAayciebmY7Fm7Vu3HrSutYVC0" />
+  <link rel="icon" type="image/x-icon" href="/images/IMG_1421.png">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500&family=Source+Sans+Pro&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0d1117;
+      --card-bg: #161b22;
+      --accent: #58a6ff;
+      --text: #c9d1d9;
+      --button-bg: #21262d;
+      --button-hover: #30363d;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: radial-gradient(circle at 20% 30%, #0b0c10, #0d1117);
+      color: var(--text);
+      font-family: 'Source Sans Pro', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background-image: url('https://www.transparenttextures.com/patterns/stardust.png');
+    }
+
+    .container {
+      background-color: var(--card-bg);
+      border-radius: 16px;
+      padding: 2rem 3rem;
+      max-width: 600px;
+      width: 90%;
+      box-shadow: 0 0 25px rgba(88, 166, 255, 0.2);
+      text-align: center;
+    }
+
+    h1 {
+      font-family: 'Orbitron', sans-serif;
+      color: var(--accent);
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      text-shadow: 0 0 8px #58a6ff88;
+    }
+
+    .nav-link {
+      display: block;
+      background-color: var(--button-bg);
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: bold;
+      padding: 0.75rem 1rem;
+      margin: 0.5rem 0;
+      border-radius: 8px;
+      transition: background 0.3s, transform 0.2s;
+    }
+
+    .nav-link:hover {
+      background-color: var(--button-hover);
+      transform: scale(1.02);
+    }
+
+    footer {
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      color: #888;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
 </head>
 <body>
-<h1>My Space</h1>
-<br>
-<a href="./Keyboard">Keyboard Control</a> <br>
-<a href="./FlappyBird/FlappyBird.html">Flappy Bird</a> <br>
-<a href="./sample">3D example</a> <br>
-<a href="./VRExample.html">VR Example</a><br/><br/><br/>
- <script src="https://utteranc.es/client.js"
-        repo="MySpace-2468/MySpace-2468.github.io"
-        issue-term="pathname"
-        theme="preferred-color-scheme"
-        crossorigin="anonymous"
-        async>
-</script>
- <div>Icons made from <a href="https://www.onlinewebfonts.com/icon">svg icons</a>is licensed by CC BY 4.0</div>
+  <div class="container">
+    <h1>My Space</h1>
+    <a class="nav-link" href="./Keyboard">🎹 Keyboard Control</a>
+    <a class="nav-link" href="./FlappyBird/FlappyBird.html">🐤 Flappy Bird</a>
+    <a class="nav-link" href="./sample">🔺 3D Example</a>
+    <a class="nav-link" href="./VRExample.html">🕶️ VR Example</a>
+
+    <section style="margin-top: 2rem;">
+      <script src="https://utteranc.es/client.js"
+              repo="MySpace-2468/MySpace-2468.github.io"
+              issue-term="pathname"
+              theme="preferred-color-scheme"
+              crossorigin="anonymous"
+              async>
+      </script>
+    </section>
+
+    <footer>
+      <p>Icons from <a href="https://www.onlinewebfonts.com/icon" target="_blank">SVG Icons</a> — Licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a>.</p>
+      <p>Made with 💙 by Joe Bloggs</p>
+    </footer>
+  </div>
 </body>
- </html>
+</html>

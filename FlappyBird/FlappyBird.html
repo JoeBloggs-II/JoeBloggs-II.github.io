@@ -37,10 +37,15 @@ var myGameArea = {
     clear : function() {
         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
     },
-    stop : function() {
-        clearInterval(this.interval);
+    stop: function() {
+    clearInterval(this.interval);
+    setTimeout(() => {
         alert("Game Over! Final score: " + this.frameNo);
-    }
+        // Reset all game variables
+        myObstacles = [];
+        startGame();
+    }, 100);
+}
 };
 
 function component(width, height, color, x, y, type) {

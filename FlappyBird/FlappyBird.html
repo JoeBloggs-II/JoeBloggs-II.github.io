@@ -19,7 +19,7 @@ var myScore;
 
 function startGame() {
     myGamePiece = new component(30, 30, "red", 10, 120);
-    myGamePiece.gravity = 0.5;
+    myGamePiece.gravity = 0.15;
     myScore = new component("30px", "Consolas", "black", 280, 40, "text");
     myGameArea.start();
 }
@@ -123,7 +123,7 @@ function updateGameArea() {
 }
 
     for (let i = 0; i < myObstacles.length; i++) {
-        myObstacles[i].x += -1;
+        myObstacles[i].x += -2;
         myObstacles[i].update();
     }
     myScore.text = "SCORE: " + myGameArea.frameNo;
@@ -137,7 +137,7 @@ function everyinterval(n) {
 }
 
 function flap() {
-    myGamePiece.gravitySpeed = -2.5;  // tap causes upward thrust
+    myGamePiece.gravitySpeed = -4;  // tap causes upward thrust
 }
 
 </script>

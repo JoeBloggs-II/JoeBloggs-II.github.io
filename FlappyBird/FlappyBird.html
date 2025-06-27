@@ -108,17 +108,20 @@ function updateGameArea() {
     }
     myGameArea.clear();
     myGameArea.frameNo += 1;
-    if (myGameArea.frameNo == 1 || everyinterval(150)) {
-        x = myGameArea.canvas.width;
-        minHeight = 20;
-        maxHeight = 200;
-        height = Math.floor(Math.random()*(maxHeight-minHeight+1)+minHeight);
-        minGap = 50;
-        maxGap = 200;
-        gap = Math.floor(Math.random()*(maxGap-minGap+1)+minGap);
-        myObstacles.push(new component(10, height, "green", x, 0));
-        myObstacles.push(new component(10, myGameArea.canvas.height - height - gap, "green", x, height + gap));
-    }
+    if (myGameArea.frameNo === 1 || everyinterval(150)) {
+    const x = myGameArea.canvas.width;
+    const pipeWidth = 40; // Wider pipes
+    const gapHeight = 120; // Constant gap size
+    const minGapY = 40;
+    const maxGapY = myGameArea.canvas.height - gapHeight - 40;
+    const gapY = Math.floor(Math.random() * (maxGapY - minGapY + 1) + minGapY);
+
+    // Top pipe
+    myObstacles.push(new component(pipeWidth, gapY, "green", x, 0));
+    // Bottom pipe
+    myObstacles.push(new component(pipeWidth, myGameArea.canvas.height - gapY - gapHeight, "green", x, gapY + gapHeight));
+}
+
     for (let i = 0; i < myObstacles.length; i++) {
         myObstacles[i].x += -1;
         myObstacles[i].update();

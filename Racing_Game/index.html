@@ -57,9 +57,9 @@
   canvas.height = window.innerHeight;
 
   const carImage = new Image();
-  carImage.src = "assets/red_car.svg"; // Provide this image
+  carImage.src = "assets/red_car.svg";
   const carOtherImage = new Image();
-  carOtherImage.src = "assets/blue_car.svg"; // Provide this image
+  carOtherImage.src = "assets/blue_car.svg";
 
   const me = {
     id: Math.random().toString(36).substr(2, 5),
@@ -116,7 +116,7 @@
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
-    ctx.drawImage(image, -15, -15, 30, 30);
+    ctx.drawImage(image, -48, -23.8, 96, 47.6);
     ctx.restore();
   }
 

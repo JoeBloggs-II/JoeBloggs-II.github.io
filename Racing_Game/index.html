@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Turbo Trackers</title>
+  <style>
+    html, body {
+      margin: 0;
+      background: #111;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      background: #222;
+    }
+    #controls {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      z-index: 10;
+    }
+    .btn {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      border: 2px solid #fff;
+      color: white;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: manipulation;
+    }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="controls">
+  <button class="btn" id="left">⟵</button>
+  <button class="btn" id="up">↑</button>
+  <button class="btn" id="down">↓</button>
+  <button class="btn" id="right">⟶</button>
+</div>
+<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+<script>
+  const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
+  const ably = new Ably.Realtime(API_KEY);
+  const channel = ably.channels.get("racing-room");
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const carImage = new Image();
+  carImage.src = "assets/car_red.png"; // Provide this image
+  const carOtherImage = new Image();
+  carOtherImage.src = "assets/car_blue.png"; // Provide this image
+
+  const me = {
+    id: Math.random().toString(36).substr(2, 5),
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    angle: 0,
+    speed: 0,
+    keys: {}
+  };
+  const others = {};
+
+  document.addEventListener("keydown", e => me.keys[e.key] = true);
+  document.addEventListener("keyup", e => me.keys[e.key] = false);
+
+  // Mobile controls
+  const controls = {
+    left: document.getElementById("left"),
+    right: document.getElementById("right"),
+    up: document.getElementById("up"),
+    down: document.getElementById("down")
+  };
+
+  Object.entries(controls).forEach(([dir, btn]) => {
+    btn.addEventListener("touchstart", () => me.keys[dir] = true);
+    btn.addEventListener("touchend", () => me.keys[dir] = false);
+  });
+
+  function update() {
+    if (me.keys["ArrowUp"] || me.keys["w"] || me.keys.up) me.speed += 0.2;
+    if (me.keys["ArrowDown"] || me.keys["s"] || me.keys.down) me.speed -= 0.2;
+    if (me.keys["ArrowLeft"] || me.keys["a"] || me.keys.left) me.angle -= 0.05;
+    if (me.keys["ArrowRight"] || me.keys["d"] || me.keys.right) me.angle += 0.05;
+
+    me.speed *= 0.98;
+    me.x += Math.cos(me.angle) * me.speed;
+    me.y += Math.sin(me.angle) * me.speed;
+
+    channel.publish("player-state", {
+      id: me.id,
+      x: me.x,
+      y: me.y,
+      angle: me.angle
+    });
+  }
+
+  channel.subscribe("player-state", msg => {
+    const { id, x, y, angle } = msg.data;
+    if (id !== me.id) {
+      others[id] = { x, y, angle, lastSeen: Date.now() };
+    }
+  });
+
+  function drawCar(x, y, angle, image) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.drawImage(image, -15, -15, 30, 30);
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawCar(me.x, me.y, me.angle, carImage);
+    for (const id in others) {
+      const p = others[id];
+      if (Date.now() - p.lastSeen > 3000) {
+        delete others[id];
+        continue;
+      }
+      drawCar(p.x, p.y, p.angle, carOtherImage);
+    }
+  }
+
+  function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+  }
+
+  gameLoop();
+</script>
+</body>
+</html>

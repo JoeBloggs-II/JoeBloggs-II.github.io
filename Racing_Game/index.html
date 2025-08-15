@@ -71,6 +71,49 @@
   };
   const others = {};
 
+channel.subscribe("player-state", msg => {
+  const { id, x, y, angle } = msg.data;
+  if (id !== me.id) {
+    if (!others[id]) others[id] = { history: [] };
+    others[id].history.push({ x, y, angle, time: Date.now() });
+    // Keep history short
+    if (others[id].history.length > 10) others[id].history.shift();
+  }
+});
+
+function getInterpolatedState(history) {
+  const renderTimestamp = Date.now() - 100; // 100ms in the past
+  if (history.length < 2) return history[0];
+
+  // Find the two samples around the render time
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].time <= renderTimestamp) {
+      const older = history[i];
+      const newer = history[i + 1] || older;
+      const t = (renderTimestamp - older.time) / (newer.time - older.time || 1);
+      return {
+        x: older.x + (newer.x - older.x) * t,
+        y: older.y + (newer.y - older.y) * t,
+        angle: older.angle + (newer.angle - older.angle) * t
+      };
+    }
+  }
+  return history[0];
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawCar(me.x, me.y, me.angle, carImage);
+
+  for (const id in others) {
+    const state = getInterpolatedState(others[id].history);
+    if (state) {
+      drawCar(state.x, state.y, state.angle, carOtherImage);
+    }
+  }
+}
+
+
   document.addEventListener("keydown", e => me.keys[e.key] = true);
   document.addEventListener("keyup", e => me.keys[e.key] = false);
 

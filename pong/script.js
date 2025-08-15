@@ -25,42 +25,37 @@ canvas.addEventListener("mousemove", e => {
   const rect = canvas.getBoundingClientRect();
   const mouseY = e.clientY - rect.top;
   playerY = mouseY - PADDLE_HEIGHT / 2;
-  // Clamp paddle within bounds
   playerY = Math.max(0, Math.min(canvas.height - PADDLE_HEIGHT, playerY));
 });
 
 // Keyboard controls
 document.addEventListener("keydown", e => {
-  if (e.key === "ArrowUp") upPressed = true;
-  if (e.key === "ArrowDown") downPressed = true;
+  if (e.key === "ArrowUp") {
+    upPressed = true;
+    e.preventDefault();
+  }
+  if (e.key === "ArrowDown") {
+    downPressed = true;
+    e.preventDefault();
+  }
 });
 
 document.addEventListener("keyup", e => {
-  if (e.key === "ArrowUp") upPressed = false;
-  if (e.key === "ArrowDown") downPressed = false;
+  if (e.key === "ArrowUp") {
+    upPressed = false;
+    e.preventDefault();
+  }
+  if (e.key === "ArrowDown") {
+    downPressed = false;
+    e.preventDefault();
+  }
 });
 
-// Draw everything
-function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Center line
-  ctx.strokeStyle = "#888";
-  ctx.setLineDash([16, 16]);
-  ctx.beginPath();
-  ctx.moveTo(canvas.width / 2, 0);
-  ctx.lineTo(canvas.width / 2, canvas.height);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Draw paddles
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(PLAYER_X, playerY, PADDLE_WIDTH, PADDLE_HEIGHT);
-  ctx.fillRect(AI_X, aiY, PADDLE_WIDTH, PADDLE_HEIGHT);
-
-  // Draw ball
-  ctx.fillStyle = "#0ff";
-  ctx.fillRect(ballX, ballY, BALL_SIZE, BALL_SIZE);
+// Update paddle with keyboard
+function updatePlayerPaddleKeyboard() {
+  if (upPressed) playerY -= PADDLE_SPEED;
+  if (downPressed) playerY += PADDLE_SPEED;
+  playerY = Math.max(0, Math.min(canvas.height - PADDLE_HEIGHT, playerY));
 }
 
 // Simple AI to move paddle toward ball
@@ -90,7 +85,6 @@ function updateBall() {
     ballY <= playerY + PADDLE_HEIGHT
   ) {
     ballVX = Math.abs(ballVX);
-    // Add spin based on where hit
     let hitPos = (ballY + BALL_SIZE / 2) - (playerY + PADDLE_HEIGHT / 2);
     ballVY += hitPos * 0.15;
   }
@@ -115,15 +109,27 @@ function updateBall() {
   }
 }
 
-// Update paddle with keyboard
-function updatePlayerPaddleKeyboard() {
-  if (upPressed) {
-    playerY -= PADDLE_SPEED;
-  }
-  if (downPressed) {
-    playerY += PADDLE_SPEED;
-  }
-  playerY = Math.max(0, Math.min(canvas.height - PADDLE_HEIGHT, playerY));
+// Draw everything
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Center line
+  ctx.strokeStyle = "#888";
+  ctx.setLineDash([16, 16]);
+  ctx.beginPath();
+  ctx.moveTo(canvas.width / 2, 0);
+  ctx.lineTo(canvas.width / 2, canvas.height);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw paddles
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(PLAYER_X, playerY, PADDLE_WIDTH, PADDLE_HEIGHT);
+  ctx.fillRect(AI_X, aiY, PADDLE_WIDTH, PADDLE_HEIGHT);
+
+  // Draw ball
+  ctx.fillStyle = "#0ff";
+  ctx.fillRect(ballX, ballY, BALL_SIZE, BALL_SIZE);
 }
 
 // Main game loop

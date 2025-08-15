@@ -1,124 +1,270 @@
-<script>
-  const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
-  const ably = new Ably.Realtime(API_KEY);
-  const channel = ably.channels.get("racing-room");
-
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-
-  const carImage = new Image();
-  carImage.src = "assets/red_car.svg";
-  const carOtherImage = new Image();
-  carOtherImage.src = "assets/blue_car.svg";
-
-  const me = {
-    id: Math.random().toString(36).substr(2, 5),
-    x: Math.random() * canvas.width,
-    y: Math.random() * canvas.height,
-    angle: 0,
-    speed: 0,
-    keys: {}
-  };
-  const others = {};
-
-  document.addEventListener("keydown", e => me.keys[e.key] = true);
-  document.addEventListener("keyup", e => me.keys[e.key] = false);
-
-  // Mobile controls
-  const controls = {
-    left: document.getElementById("left"),
-    right: document.getElementById("right"),
-    up: document.getElementById("up"),
-    down: document.getElementById("down")
-  };
-  Object.entries(controls).forEach(([dir, btn]) => {
-    btn.addEventListener("touchstart", () => me.keys[dir] = true);
-    btn.addEventListener("touchend", () => me.keys[dir] = false);
-  });
-
-  function update() {
-    if (me.keys["ArrowUp"] || me.keys["w"] || me.keys.up) me.speed += 0.2;
-    if (me.keys["ArrowDown"] || me.keys["s"] || me.keys.down) me.speed -= 0.2;
-    if (me.keys["ArrowLeft"] || me.keys["a"] || me.keys.left) me.angle -= 0.05;
-    if (me.keys["ArrowRight"] || me.keys["d"] || me.keys.right) me.angle += 0.05;
-
-    me.speed *= 0.98;
-    me.x += Math.cos(me.angle) * me.speed;
-    me.y += Math.sin(me.angle) * me.speed;
-
-    channel.publish("player-state", {
-      id: me.id,
-      x: me.x,
-      y: me.y,
-      angle: me.angle
-    });
-  }
-
-  channel.subscribe("player-state", msg => {
-    const { id, x, y, angle } = msg.data;
-    if (id !== me.id) {
-      if (!others[id]) others[id] = { history: [] };
-      others[id].history.push({ x, y, angle, time: Date.now() });
-      if (others[id].history.length > 10) others[id].history.shift();
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Turbo Trackers</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      margin: 0;
+      background: #111;
+      overflow: hidden;
+      height: 100%;
     }
-  });
+    canvas {
+      display: block;
+      background: #222;
+      width: 100vw;
+      height: 100vh;
+    }
+    #controls {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      z-index: 10;
+      user-select: none;
+    }
+    .btn {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      border: 2px solid #fff;
+      color: white;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: manipulation;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
 
-  function getInterpolatedState(history) {
-    const renderTime = Date.now() - 100; // 100ms delay for interpolation
-    if (history.length < 2) return history[0];
+  <div id="controls">
+    <button class="btn" id="left">⟵</button>
+    <button class="btn" id="up">↑</button>
+    <button class="btn" id="down">↓</button>
+    <button class="btn" id="right">⟶</button>
+  </div>
 
-    for (let i = history.length - 2; i >= 0; i--) {
-      const older = history[i];
-      const newer = history[i + 1];
-      if (older.time <= renderTime && newer.time >= renderTime) {
-        const t = (renderTime - older.time) / (newer.time - older.time);
-        return {
-          x: older.x + (newer.x - older.x) * t,
-          y: older.y + (newer.y - older.y) * t,
-          angle: older.angle + (newer.angle - older.angle) * t
-        };
+  <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+  <script>
+    // --- Config ---
+    const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
+    const ROOM = "racing-room";
+
+    // Smoothing / networking
+    const INTERP_DELAY_MS = 120;    // render others slightly in the past
+    const MAX_HISTORY = 20;         // samples to keep per remote player
+    const MAX_EXTRAP_MS = 250;      // clamp extrapolation window
+    const SEND_INTERVAL_MS = 50;    // ~20Hz publish rate
+
+    // Physics tuning (kept close to your original feel; frame-rate independent)
+    const ACCEL = 0.2;              // per 60fps frame
+    const TURN = 0.05;              // radians per 60fps frame
+    const FRICTION = 0.98;          // per 60fps frame
+
+    // --- Setup canvas ---
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    // --- Assets ---
+    const carImage = new Image();
+    carImage.src = "assets/red_car.svg";
+    const carOtherImage = new Image();
+    carOtherImage.src = "assets/blue_car.svg";
+
+    // --- Ably ---
+    const ably = new Ably.Realtime(API_KEY);
+    const channel = ably.channels.get(ROOM);
+
+    // --- Player state ---
+    const me = {
+      id: Math.random().toString(36).substr(2, 5),
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      angle: 0,
+      speed: 0,
+      keys: {}
+    };
+
+    const others = {}; // id -> { history: [{x,y,angle,time}], lastSeen }
+
+    // --- Input ---
+    const keyDown = e => {
+      const k = e.key;
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
+      me.keys[k] = true;
+    };
+    const keyUp = e => {
+      const k = e.key;
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
+      me.keys[k] = false;
+    };
+    document.addEventListener("keydown", keyDown, { passive: false });
+    document.addEventListener("keyup", keyUp, { passive: false });
+
+    // Mobile controls
+    const controls = {
+      left: document.getElementById("left"),
+      right: document.getElementById("right"),
+      up: document.getElementById("up"),
+      down: document.getElementById("down")
+    };
+    Object.entries(controls).forEach(([dir, btn]) => {
+      const onStart = (e) => { e.preventDefault(); me.keys[dir] = true; };
+      const onEnd   = (e) => { e.preventDefault(); me.keys[dir] = false; };
+      btn.addEventListener("touchstart", onStart, { passive: false });
+      btn.addEventListener("touchend", onEnd, { passive: false });
+      btn.addEventListener("touchcancel", onEnd, { passive: false });
+      btn.addEventListener("pointerdown", onStart);
+      btn.addEventListener("pointerup", onEnd);
+      btn.addEventListener("pointerleave", onEnd);
+    });
+
+    // --- Helpers ---
+    function angleLerp(a, b, t) {
+      // shortest-path angular interpolation
+      let diff = ((b - a + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
+      return a + diff * t;
+    }
+
+    function drawCar(x, y, angle, image) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.drawImage(image, -48, -23.8, 96, 47.6);
+      ctx.restore();
+    }
+
+    function pushHistory(id, sample) {
+      let o = others[id];
+      if (!o) o = others[id] = { history: [], lastSeen: sample.time };
+      o.history.push(sample);
+      o.lastSeen = sample.time;
+      if (o.history.length > MAX_HISTORY) o.history.shift();
+    }
+
+    function getInterpolatedState(history, now) {
+      if (!history || history.length === 0) return null;
+      const renderTime = now - INTERP_DELAY_MS;
+
+      // If we're before the oldest, just use the oldest (no backward extrap)
+      if (renderTime <= history[0].time) return history[0];
+
+      // Find the segment containing renderTime
+      for (let i = history.length - 2; i >= 0; i--) {
+        const older = history[i];
+        const newer = history[i + 1];
+        if (older.time <= renderTime && renderTime <= newer.time) {
+          const t = (renderTime - older.time) / Math.max(1, (newer.time - older.time));
+          return {
+            x: older.x + (newer.x - older.x) * t,
+            y: older.y + (newer.y - older.y) * t,
+            angle: angleLerp(older.angle, newer.angle, t)
+          };
+        }
+      }
+
+      // Otherwise, we're after the newest -> extrapolate from last two
+      const last = history[history.length - 1];
+      const prev = history[history.length - 2] || last;
+      const dt = Math.max(1, last.time - prev.time);
+      const vx = (last.x - prev.x) / dt;
+      const vy = (last.y - prev.y) / dt;
+      const va = (last.angle - prev.angle) / dt;
+
+      const ahead = Math.min(MAX_EXTRAP_MS, renderTime - last.time);
+      return {
+        x: last.x + vx * ahead,
+        y: last.y + vy * ahead,
+        angle: last.angle + va * ahead
+      };
+    }
+
+    // --- Networking receive ---
+    channel.subscribe("player-state", (msg) => {
+      const { id, x, y, angle } = msg.data || {};
+      if (!id || id === me.id) return;
+      const t = performance.now();
+      pushHistory(id, { x, y, angle, time: t });
+    });
+
+    // --- Game loop ---
+    let lastFrame = performance.now();
+    let lastSent = 0;
+
+    function update(now) {
+      const dt = (now - lastFrame) / 1000;       // seconds
+      const frameScale = dt * 60;                // match original tuning
+
+      // Input -> physics
+      if (me.keys["ArrowUp"] || me.keys["w"] || me.keys.up) me.speed += ACCEL * frameScale;
+      if (me.keys["ArrowDown"] || me.keys["s"] || me.keys.down) me.speed -= ACCEL * frameScale;
+      if (me.keys["ArrowLeft"] || me.keys["a"] || me.keys.left) me.angle -= TURN * frameScale;
+      if (me.keys["ArrowRight"] || me.keys["d"] || me.keys.right) me.angle += TURN * frameScale;
+
+      // Friction
+      me.speed *= Math.pow(FRICTION, frameScale);
+
+      // Integrate
+      me.x += Math.cos(me.angle) * me.speed * frameScale;
+      me.y += Math.sin(me.angle) * me.speed * frameScale;
+
+      // Keep on-screen (simple wrap; optional)
+      if (me.x < -60) me.x = canvas.width + 60;
+      if (me.y < -60) me.y = canvas.height + 60;
+      if (me.x > canvas.width + 60) me.x = -60;
+      if (me.y > canvas.height + 60) me.y = -60;
+
+      // Throttled publish
+      if (now - lastSent >= SEND_INTERVAL_MS) {
+        channel.publish("player-state", {
+          id: me.id,
+          x: me.x,
+          y: me.y,
+          angle: me.angle
+        });
+        lastSent = now;
+      }
+
+      // Cull stale players
+      for (const id in others) {
+        if (now - others[id].lastSeen > 3000) delete others[id];
       }
     }
-    // No newer point? extrapolate from last two
-    const last = history[history.length - 1];
-    const secondLast = history[history.length - 2];
-    const dt = (last.time - secondLast.time) || 1;
-    const vx = (last.x - secondLast.x) / dt;
-    const vy = (last.y - secondLast.y) / dt;
-    const va = (last.angle - secondLast.angle) / dt;
-    const extrapolation = (renderTime - last.time);
-    return {
-      x: last.x + vx * extrapolation,
-      y: last.y + vy * extrapolation,
-      angle: last.angle + va * extrapolation
-    };
-  }
 
-  function drawCar(x, y, angle, image) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    ctx.drawImage(image, -48, -23.8, 96, 47.6);
-    ctx.restore();
-  }
+    function draw(now) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawCar(me.x, me.y, me.angle, carImage);
+      // Draw me
+      drawCar(me.x, me.y, me.angle, carImage);
 
-    for (const id in others) {
-      const state = getInterpolatedState(others[id].history);
-      if (state) drawCar(state.x, state.y, state.angle, carOtherImage);
+      // Draw others (smoothed)
+      for (const id in others) {
+        const state = getInterpolatedState(others[id].history, now);
+        if (state) drawCar(state.x, state.y, state.angle, carOtherImage);
+      }
     }
-  }
 
-  function gameLoop() {
-    update();
-    draw();
-    requestAnimationFrame(gameLoop);
-  }
-
-  gameLoop();
-</script>
+    function loop(now) {
+      update(now);
+      draw(now);
+      lastFrame = now;
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

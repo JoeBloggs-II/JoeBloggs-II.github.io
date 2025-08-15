@@ -16,6 +16,10 @@ let ballY = canvas.height / 2 - BALL_SIZE / 2;
 let ballVX = BALL_SPEED * (Math.random() < 0.5 ? 1 : -1);
 let ballVY = BALL_SPEED * (Math.random() * 2 - 1);
 
+// Keyboard control state
+let upPressed = false;
+let downPressed = false;
+
 // Mouse control for player paddle
 canvas.addEventListener("mousemove", e => {
   const rect = canvas.getBoundingClientRect();
@@ -23,6 +27,17 @@ canvas.addEventListener("mousemove", e => {
   playerY = mouseY - PADDLE_HEIGHT / 2;
   // Clamp paddle within bounds
   playerY = Math.max(0, Math.min(canvas.height - PADDLE_HEIGHT, playerY));
+});
+
+// Keyboard controls
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowUp") upPressed = true;
+  if (e.key === "ArrowDown") downPressed = true;
+});
+
+document.addEventListener("keyup", e => {
+  if (e.key === "ArrowUp") upPressed = false;
+  if (e.key === "ArrowDown") downPressed = false;
 });
 
 // Draw everything
@@ -100,8 +115,20 @@ function updateBall() {
   }
 }
 
+// Update paddle with keyboard
+function updatePlayerPaddleKeyboard() {
+  if (upPressed) {
+    playerY -= PADDLE_SPEED;
+  }
+  if (downPressed) {
+    playerY += PADDLE_SPEED;
+  }
+  playerY = Math.max(0, Math.min(canvas.height - PADDLE_HEIGHT, playerY));
+}
+
 // Main game loop
 function loop() {
+  updatePlayerPaddleKeyboard();
   updateAI();
   updateBall();
   draw();

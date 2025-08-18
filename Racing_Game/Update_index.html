@@ -1,436 +1,142 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Turbo Trackers</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root{
-      --hud:#fff; --shadow:rgba(0,0,0,0.45);
-    }
-    html, body { margin: 0; background: #0d0d0f; overflow: hidden; height: 100%; }
-    canvas { display: block; background: #1b1f24; width: 100vw; height: 100vh; }
-
-    /* HUD */
-    .hud { position: fixed; inset: 0; pointer-events: none; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; }
-    .panel { position: absolute; background: rgba(0,0,0,0.35); color: var(--hud); padding: 10px 12px; border-radius: 12px; box-shadow: 0 6px 24px var(--shadow); backdrop-filter: blur(6px); }
-    .top-left { top: 10px; left: 10px; }
-    .top-right { top: 10px; right: 10px; }
-    .bottom-center { bottom: 10px; left: 50%; transform: translateX(-50%); }
-    .title { font-weight: 700; letter-spacing: 0.5px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-
-    #lights { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; pointer-events: none; }
-    .light { width: 26px; height: 26px; border-radius: 50%; background: #222; box-shadow: inset 0 0 8px rgba(0,0,0,0.6), 0 2px 10px var(--shadow); }
-    .light.on { background: #e11; }
-    .light.go { background: #1fbf4b; }
-
-    /* Mini-map */
-    #minimap { position: absolute; right: 10px; top: 100px; width: 180px; height: 180px; background: rgba(0,0,0,0.35); border-radius: 12px; box-shadow: 0 6px 24px var(--shadow); backdrop-filter: blur(6px); }
-
-    /* Mobile controls */
-    #controls { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; z-index: 10; user-select: none; }
-    .btn { width: 60px; height: 60px; border-radius: 50%; background: rgba(255,255,255,0.08); border: 2px solid #fff; color: white; font-size: 24px; display: flex; align-items: center; justify-content: center; touch-action: manipulation; pointer-events: auto; }
-
-    /* Leaderboard */
-    table { border-collapse: collapse; font-size: 14px; }
-    th, td { padding: 4px 8px; }
-    th { text-align: left; opacity: 0.85; }
-    tr:nth-child(even) td { background: rgba(255,255,255,0.06); border-radius: 6px; }
-  </style>
+<meta charset="UTF-8" />
+<title>Turbo Trackers — Drift Edition</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin:0; overflow:hidden; background:#111; height:100%; }
+  canvas { display:block; background:#222; width:100vw; height:100vh; }
+  #controls { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); display:flex; gap:10px; z-index:10; user-select:none;}
+  .btn { width:60px; height:60px; border-radius:50%; background: rgba(255,255,255,0.1); border:2px solid #fff; color:white; font-size:24px; display:flex; align-items:center; justify-content:center; touch-action: manipulation; }
+  #minimap { position:fixed; top:10px; right:10px; width:150px; height:150px; background:#111; border:2px solid #fff; z-index:11;}
+</style>
 </head>
 <body>
-  <canvas id="game"></canvas>
+<canvas id="game"></canvas>
+<canvas id="minimap"></canvas>
+<div id="controls">
+  <button class="btn" id="left">⟵</button>
+  <button class="btn" id="up">↑</button>
+  <button class="btn" id="down">↓</button>
+  <button class="btn" id="right">⟶</button>
+</div>
+<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+<script>
+const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
+const ROOM = "racing-room";
 
-  <div class="hud">
-    <div class="panel top-left">
-      <div class="title">Turbo Trackers</div>
-      <div id="status" class="mono">Connecting…</div>
-      <div id="lapstats" class="mono">Lap: 0/3 • Last: — • Best: —</div>
-      <div id="speed" class="mono">Speed: 0</div>
-    </div>
+// Canvas setup
+const canvas = document.getElementById("game"), ctx = canvas.getContext("2d");
+const mini = document.getElementById("minimap"), mctx = mini.getContext("2d");
+function resize() { canvas.width=window.innerWidth; canvas.height=window.innerHeight; mini.width=150; mini.height=150; }
+window.addEventListener("resize", resize); resize();
 
-    <div id="minimap"></div>
+// Track setup
+const TRACK = {
+  path: [
+    {x:200,y:200},{x:1800,y:200},{x:1800,y:1200},{x:200,y:1200} // rectangle loop, you can add curves later
+  ],
+  width:80,
+  boostPads:[ {x:500,y:200,w:100,h:40}, {x:1400,y:1200,w:100,h:40} ],
+  obstacles:[ {x:900,y:700,w:50,h:50}, {x:1300,y:400,w:60,h:60} ]
+};
 
-    <div class="panel top-right">
-      <div class="title">Leaderboard</div>
-      <table id="board"><thead><tr><th>Player</th><th>Best</th></tr></thead><tbody></tbody></table>
-    </div>
+// Car assets
+const carImage = new Image(); carImage.src = "assets/red_car.svg";
+const carOtherImage = new Image(); carOtherImage.src = "assets/blue_car.svg";
 
-    <div id="lights"></div>
-  </div>
+// Ably
+const ably = new Ably.Realtime(API_KEY); const channel = ably.channels.get(ROOM);
 
-  <div id="controls">
-    <button class="btn" id="left">⟵</button>
-    <button class="btn" id="up">↑</button>
-    <button class="btn" id="down">↓</button>
-    <button class="btn" id="right">⟶</button>
-  </div>
+// Player
+const me = { id: Math.random().toString(36).substr(2,5), x:250, y:250, angle:0, speed:0, keys:{}, drift:0 };
+const others = {};
 
-  <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
-  <script>
-  // ======= Config =======
-  const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
-  const ROOM = "racing-room";
-  const LAPS_TO_WIN = 3;
+// Input
+const keys = {}; document.addEventListener("keydown", e=>{keys[e.key]=true;}); document.addEventListener("keyup", e=>{keys[e.key]=false;});
+// Mobile controls
+const controls={left:document.getElementById("left"),up:document.getElementById("up"),down:document.getElementById("down"),right:document.getElementById("right")};
+Object.entries(controls).forEach(([dir,btn])=>{
+  btn.addEventListener("touchstart",e=>{e.preventDefault();keys[dir]=true;},{passive:false});
+  btn.addEventListener("touchend",e=>{e.preventDefault();keys[dir]=false;},{passive:false});
+});
 
-  // Smoothing / networking
-  const INTERP_DELAY_MS = 120;    // render others slightly in the past
-  const MAX_HISTORY = 20;         // samples to keep per remote player
-  const MAX_EXTRAP_MS = 250;      // clamp extrapolation window
-  const SEND_INTERVAL_MS = 50;    // ~20Hz publish rate
+// Networking history
+const INTERP_DELAY_MS = 120, MAX_HISTORY = 20, MAX_EXTRAP_MS = 250, SEND_INTERVAL_MS=50;
+function pushHistory(id,sample){ let o=others[id]; if(!o)o=others[id]={history:[],lastSeen:sample.time}; o.history.push(sample); o.lastSeen=sample.time; if(o.history.length>MAX_HISTORY)o.history.shift();}
+function angleLerp(a,b,t){let diff=((b-a+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;return a+diff*t;}
+function getInterpolatedState(history,now){ if(!history||history.length===0)return null; const renderTime=now-INTERP_DELAY_MS; if(renderTime<=history[0].time)return history[0]; for(let i=history.length-2;i>=0;i--){const older=history[i],newer=history[i+1];if(older.time<=renderTime&&renderTime<=newer.time){const t=(renderTime-older.time)/(newer.time-older.time); return {x:older.x+(newer.x-older.x)*t,y:older.y+(newer.y-older.y)*t,angle:angleLerp(older.angle,newer.angle,t)}}} const last=history[history.length-1], prev=history[history.length-2]||last; const dt=Math.max(1,last.time-prev.time); const vx=(last.x-prev.x)/dt, vy=(last.y-prev.y)/dt, va=(last.angle-prev.angle)/dt; const ahead=Math.min(MAX_EXTRAP_MS,renderTime-last.time); return {x:last.x+vx*ahead,y:last.y+vy*ahead,angle:last.angle+va*ahead};}
+channel.subscribe("player-state",msg=>{const{id,x,y,angle}=msg.data||{}; if(!id||id===me.id)return; pushHistory(id,{x,y,angle,time:performance.now()});});
 
-  // Physics tuning (frame-rate independent)
-  const ACCEL = 0.22;             // per 60fps frame
-  const TURN = 0.055;             // radians per 60fps frame
-  const FRICTION = 0.985;         // per 60fps frame
-  const OFFROAD_DRAG = 0.92;      // friction multiplier off track
-  const MAX_SPEED = 20;           // soft clamp
+// Particle system
+const particles=[];
+function emitDrift(x,y,angle){particles.push({x,y,angle,life:30});}
+function updateParticles(){for(let i=particles.length-1;i>=0;i--){particles[i].life--; if(particles[i].life<=0)particles.splice(i,1); else{particles[i].x+=Math.cos(particles[i].angle+Math.PI/2)*0.5; particles[i].y+=Math.sin(particles[i].angle+Math.PI/2)*0.5;}}}
+function drawParticles(){particles.forEach(p=>{ctx.fillStyle=`rgba(255,255,255,${p.life/30})`; ctx.fillRect(p.x-2,p.y-2,4,4);});}
 
-  // Track: centerline poly & width
-  const TRACK_WIDTH = 240; // full width in px
-  const CENTERLINE = [
-    {x: 400,  y: 400},
-    {x: 1200, y: 380},
-    {x: 1700, y: 520},
-    {x: 1900, y: 900},
-    {x: 1600, y: 1200},
-    {x: 1100, y: 1300},
-    {x: 700,  y: 1200},
-    {x: 420,  y: 900},
-  ];
-  // Auto-close loop
-  CENTERLINE.push(CENTERLINE[0]);
+// Physics
+const ACCEL=0.2, TURN=0.05, FRICTION=0.96, DRIFT_FACTOR=0.3;
 
-  // Checkpoints: indices along centerline (excluding final closure, we make gates between points)
-  const CHECKPOINTS = [0,1,2,3,4,5,6,7];
+// Game loop
+let lastFrame=performance.now(), lastSent=0;
+function loop(now){
+  const dt=(now-lastFrame)/1000; const scale=dt*60;
+  // Input
+  if(keys["ArrowUp"]||keys.w||keys.up) me.speed+=ACCEL*scale;
+  if(keys["ArrowDown"]||keys.s||keys.down) me.speed-=ACCEL*scale;
+  if(keys["ArrowLeft"]||keys.a||keys.left){ me.angle-=TURN*scale; if(me.speed>2) me.drift+=DRIFT_FACTOR; }
+  if(keys["ArrowRight"]||keys.d||keys.right){ me.angle+=TURN*scale; if(me.speed>2) me.drift+=DRIFT_FACTOR; }
+  me.speed*=Math.pow(FRICTION,scale);
+  me.x+=Math.cos(me.angle)*me.speed*scale;
+  me.y+=Math.sin(me.angle)*me.speed*scale;
+  if(me.drift>0){ emitDrift(me.x,me.y,me.angle); me.drift*=0.9; }
 
-  // ======= Setup canvas =======
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
-  function resize(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-  window.addEventListener('resize', resize); resize();
+  // Boost pad detection
+  TRACK.boostPads.forEach(b=>{if(me.x>b.x && me.x<b.x+b.w && me.y>b.y && me.y<b.y+b.h) me.speed+=0.5;});
 
-  // Minimap canvas
-  const mini = document.getElementById('minimap');
-  const mcv = document.createElement('canvas');
-  const mctx = mcv.getContext('2d');
-  mini.appendChild(mcv);
-  function resizeMini(){ mcv.width = mini.clientWidth; mcv.height = mini.clientHeight; drawMiniStatic(); }
-  new ResizeObserver(resizeMini).observe(mini);
+  // Send state
+  if(now-lastSent>SEND_INTERVAL_MS){ channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle}); lastSent=now; }
 
-  // ======= Assets =======
-  const redCar = new Image(); redCar.src = 'assets/red_car.svg';
-  const blueCar = new Image(); blueCar.src = 'assets/blue_car.svg';
+  // Cull stale players
+  for(const id in others) if(now-others[id].lastSeen>3000) delete others[id];
 
-  // ======= Ably =======
-  const ably = new Ably.Realtime(API_KEY);
-  const channel = ably.channels.get(ROOM);
+  // Camera
+  const camX=me.x-canvas.width/2; const camY=me.y-canvas.height/2;
 
-  // ======= Players =======
-  const me = {
-    id: Math.random().toString(36).slice(2, 7),
-    name: 'P' + Math.floor(Math.random()*1000),
-    x: CENTERLINE[0].x + 20 + Math.random()*40,
-    y: CENTERLINE[0].y + 20 + Math.random()*40,
-    angle: 0,
-    speed: 0,
-    keys: {},
-    lap: 0,
-    nextCp: 0,
-    lapStart: performance.now(),
-    bestLap: null,
-  };
-  const others = {}; // id -> {name, history:[{x,y,angle,time}], lastSeen, lap, bestLap}
+  // Draw
+  ctx.fillStyle="#333"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.save(); ctx.translate(-camX,-camY);
+  // Track
+  ctx.fillStyle="#555"; ctx.strokeStyle="#fff"; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(TRACK.path[0].x,TRACK.path[0].y);
+  for(let i=1;i<TRACK.path.length;i++) ctx.lineTo(TRACK.path[i].x,TRACK.path[i].y);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // Obstacles
+  ctx.fillStyle="orange"; TRACK.obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+  // Boost pads
+  ctx.fillStyle="lime"; TRACK.boostPads.forEach(b=>ctx.fillRect(b.x,b.y,b.w,b.h));
+  // Particles
+  drawParticles();
+  // Cars
+  drawCar(me.x,me.y,me.angle,carImage);
+  for(const id in others){const s=getInterpolatedState(others[id].history,now); if(s) drawCar(s.x,s.y,s.angle,carOtherImage);}
+  ctx.restore();
 
-  // ======= DOM =======
-  const statusEl = document.getElementById('status');
-  const lapstatsEl = document.getElementById('lapstats');
-  const speedEl = document.getElementById('speed');
-  const boardEl = document.querySelector('#board tbody');
-  const lightsEl = document.getElementById('lights');
-
-  // ======= Input =======
-  function setKey(k, v){ me.keys[k] = v; }
-  document.addEventListener('keydown', e=>{ const k=e.key; if(k.startsWith('Arrow')) e.preventDefault(); setKey(k,true); });
-  document.addEventListener('keyup',   e=>{ const k=e.key; if(k.startsWith('Arrow')) e.preventDefault(); setKey(k,false); });
-
-  const controls = {
-    left: document.getElementById('left'),
-    right: document.getElementById('right'),
-    up: document.getElementById('up'),
-    down: document.getElementById('down')
-  };
-  Object.entries(controls).forEach(([dir,btn])=>{
-    const on=(e)=>{ e.preventDefault(); me.keys[dir]=true; };
-    const off=(e)=>{ e.preventDefault(); me.keys[dir]=false; };
-    btn.addEventListener('pointerdown', on);
-    btn.addEventListener('pointerup', off);
-    btn.addEventListener('pointerleave', off);
-    btn.addEventListener('touchstart', on, {passive:false});
-    btn.addEventListener('touchend', off, {passive:false});
-  });
-
-  // ======= Track helpers =======
-  function segDistPoint(ax,ay,bx,by,px,py){
-    const abx=bx-ax, aby=by-ay, apx=px-ax, apy=py-ay; const ab2=abx*abx+aby*aby;
-    const t = ab2? Math.max(0,Math.min(1,(apx*abx+apy*aby)/ab2)) : 0;
-    const cx=ax+abx*t, cy=ay+aby*t; const dx=px-cx, dy=py-cy; return {d: Math.hypot(dx,dy), t, cx, cy};
-  }
-  function nearestToCenter(x,y){
-    let best={d:Infinity,cx:0,cy:0, idx:0, t:0};
-    for(let i=0;i<CENTERLINE.length-1;i++){
-      const a=CENTERLINE[i], b=CENTERLINE[i+1];
-      const r=segDistPoint(a.x,a.y,b.x,b.y,x,y);
-      if(r.d<best.d){ best={...r, idx:i}; }
-    }
-    return best;
-  }
-  function onTrack(x,y){ return nearestToCenter(x,y).d <= TRACK_WIDTH*0.5; }
-
-  function drawTrack(ctx2, scale=1, ox=0, oy=0){
-    // asphalt
-    ctx2.save();
-    ctx2.translate(ox,oy); ctx2.scale(scale,scale);
-    ctx2.lineJoin = 'round'; ctx2.lineCap='round';
-    // Outer
-    ctx2.strokeStyle = '#2a2f36'; ctx2.lineWidth = TRACK_WIDTH; ctx2.beginPath();
-    for(let i=0;i<CENTERLINE.length;i++){
-      const p=CENTERLINE[i]; if(i===0) ctx2.moveTo(p.x,p.y); else ctx2.lineTo(p.x,p.y);
-    }
-    ctx2.stroke();
-    // Center line (for vibe)
-    ctx2.setLineDash([40,40]); ctx2.strokeStyle = 'rgba(255,255,255,0.35)'; ctx2.lineWidth = 6; ctx2.beginPath();
-    for(let i=0;i<CENTERLINE.length;i++){
-      const p=CENTERLINE[i]; if(i===0) ctx2.moveTo(p.x,p.y); else ctx2.lineTo(p.x,p.y);
-    }
-    ctx2.stroke(); ctx2.setLineDash([]);
-
-    // Start/finish gate (between point 0 and 1)
-    const a=CENTERLINE[0], b=CENTERLINE[1];
-    const nx = (b.y - a.y); const ny = -(b.x - a.x); // perpendicular
-    const nlen = Math.hypot(nx,ny)||1; const ux=nx/nlen, uy=ny/nlen;
-    ctx2.strokeStyle='#fff'; ctx2.lineWidth=12; ctx2.beginPath();
-    ctx2.moveTo(a.x - ux*(TRACK_WIDTH*0.5), a.y - uy*(TRACK_WIDTH*0.5));
-    ctx2.lineTo(a.x + ux*(TRACK_WIDTH*0.5), a.y + uy*(TRACK_WIDTH*0.5));
-    ctx2.stroke();
-    ctx2.restore();
-  }
-
-  function drawMiniStatic(){
-    const pad=8; const w=mcv.width, h=mcv.height; mctx.clearRect(0,0,w,h);
-    // Fit centerline into minimap
-    const xs=CENTERLINE.map(p=>p.x), ys=CENTERLINE.map(p=>p.y);
-    const minx=Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys);
-    const sx=(w-2*pad)/(maxx-minx), sy=(h-2*pad)/(maxy-miny); const s=Math.min(sx,sy);
-    const ox=pad - minx*s, oy=pad - miny*s;
-    drawTrack(mctx, s, ox, oy);
-    // Cache transform for drawing dots
-    minimapTransform = {s, ox, oy};
-  }
-  let minimapTransform={s:1,ox:0,oy:0};
-
-  // ======= Race flow =======
-  const State = { WAITING:0, COUNTDOWN:1, RACING:2, FINISHED:3 };
-  let gameState = State.WAITING;
-
-  function setStatus(txt){ statusEl.textContent = txt; }
-
-  function startCountdown(){
-    gameState = State.COUNTDOWN;
-    lightsEl.innerHTML='';
-    const bulbs = [0,1,2,3].map(()=>{ const d=document.createElement('div'); d.className='light'; lightsEl.appendChild(d); return d; });
-    let i=0;
-    const iv = setInterval(()=>{
-      if(i<3){ bulbs[i].classList.add('on'); i++; }
-      else { bulbs[3].classList.add('go'); clearInterval(iv); setTimeout(()=>{lightsEl.innerHTML=''; gameState=State.RACING; me.lap=0; me.nextCp=0; me.lapStart=performance.now();}, 300); }
-    }, 700);
-  }
-
-  function lineFromPoints(a,b){ return { x1:a.x,y1:a.y, x2:b.x,y2:b.y }; }
-  function crossesGate(prevX,prevY,x,y, gateIdx){
-    const i = CHECKPOINTS[gateIdx];
-    const a=CENTERLINE[i], b=CENTERLINE[i+1];
-    const nx=(b.y-a.y), ny=-(b.x-a.x); const nlen=Math.hypot(nx,ny)||1; const ux=nx/nlen, uy=ny/nlen;
-    const gx1=a.x-ux*(TRACK_WIDTH*0.5), gy1=a.y-uy*(TRACK_WIDTH*0.5);
-    const gx2=a.x+ux*(TRACK_WIDTH*0.5), gy2=a.y+uy*(TRACK_WIDTH*0.5);
-    // segment intersection between (prev->curr) and (gate)
-    function ccw(ax,ay,bx,by,cx,cy){ return (cy-ay)*(bx-ax) > (by-ay)*(cx-ax); }
-    const A=ccw(prevX,prevY,gx1,gy1,x,y), B=ccw(prevX,prevY,gx2,gy2,x,y), C=ccw(gx1,gy1,gx2,gy2,prevX,prevY), D=ccw(gx1,gy1,gx2,gy2,x,y);
-    return A!==B && C!==D;
-  }
-
-  function tickLapIfNeeded(prevX,prevY){
-    if(crossesGate(prevX,prevY, me.x, me.y, me.nextCp)){
-      me.nextCp = (me.nextCp + 1) % CHECKPOINTS.length;
-      if(me.nextCp === 0){
-        // completed final checkpoint -> crossed start/finish
-        me.lap += 1;
-        const now=performance.now();
-        const lapTime = now - me.lapStart; me.lapStart=now;
-        if(!me.bestLap || lapTime < me.bestLap) me.bestLap = lapTime;
-        publishLap(me.name, me.bestLap);
-        if(me.lap >= LAPS_TO_WIN){ gameState=State.FINISHED; setStatus(`Finished! Best ${fmtMs(me.bestLap)}`); }
-      }
-    }
-  }
-
-  function fmtMs(ms){ if(ms==null) return '—'; const s=(ms/1000).toFixed(2); return s + 's'; }
-
-  // ======= Networking =======
-  ably.connection.on('connected', ()=>{ setStatus('Connected. Press ↑ / W to accelerate.'); });
-
-  function pushHistory(id, sample){
-    let o = others[id]; if(!o) o = others[id] = { name: sample.name||('P'+id), history: [], lastSeen: sample.time, lap:0, bestLap:null };
-    o.name = sample.name || o.name;
-    o.history.push(sample); o.lastSeen = sample.time; if(o.history.length>MAX_HISTORY) o.history.shift();
-  }
-
-  channel.subscribe('player-state', (msg)=>{
-    const { id, name, x, y, angle } = msg.data || {}; if(!id || id===me.id) return;
-    const t=performance.now(); pushHistory(id,{x,y,angle,time:t,name});
-  });
-
-  channel.subscribe('lap', (msg)=>{
-    const { id, name, bestLap } = msg.data || {}; if(!id || id===me.id) return;
-    if(!others[id]) others[id] = { name, history: [], lastSeen: performance.now(), lap: 0, bestLap: null };
-    others[id].name = name || others[id].name; others[id].bestLap = bestLap;
-    renderBoard();
-  });
-
-  function publishLap(name, bestLap){ channel.publish('lap', { id: me.id, name, bestLap }); renderBoard(); }
-
-  // ======= Smoothing =======
-  function angleLerp(a,b,t){ let d=((b-a+Math.PI)%(2*Math.PI)+(2*Math.PI))%(2*Math.PI)-Math.PI; return a + d*t; }
-  function getInterpolatedState(history, now){
-    if(!history || history.length===0) return null;
-    const renderTime = now - INTERP_DELAY_MS;
-    if(renderTime <= history[0].time) return history[0];
-    for(let i=history.length-2;i>=0;i--){
-      const older=history[i], newer=history[i+1];
-      if(older.time<=renderTime && renderTime<=newer.time){
-        const t=(renderTime-older.time)/Math.max(1,(newer.time-older.time));
-        return { x: older.x+(newer.x-older.x)*t, y: older.y+(newer.y-older.y)*t, angle: angleLerp(older.angle,newer.angle,t) };
-      }
-    }
-    // extrapolate
-    const last=history[history.length-1], prev=history[history.length-2]||last;
-    const dt=Math.max(1,last.time-prev.time); const vx=(last.x-prev.x)/dt, vy=(last.y-prev.y)/dt, va=(last.angle-prev.angle)/dt;
-    const ahead=Math.min(MAX_EXTRAP_MS, renderTime-last.time);
-    return { x:last.x+vx*ahead, y:last.y+vy*ahead, angle:last.angle+va*ahead };
-  }
-
-  // ======= Rendering helpers =======
-  function drawCar(x,y,angle,img){ ctx.save(); ctx.translate(x,y); ctx.rotate(angle); ctx.drawImage(img.complete?img:null||img, -48,-23.8,96,47.6); ctx.restore(); }
-
-  function drawWorld(){
-    // Parallax background grid for a bit of motion feel
-    const s=60; ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1;
-    const w=canvas.width, h=canvas.height; for(let x=0;x<w;x+=s){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
-    for(let y=0;y<h;y+=s){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
-    ctx.restore();
-
-    // Track world is drawn in world coords but we just draw it directly (no camera pan) for simplicity.
-    drawTrack(ctx, 1, 0, 0);
-  }
-
-  function drawMini(now){
-    const {s,ox,oy}=minimapTransform; const r=4;
-    // clear moving elements layer
-    mctx.save(); mctx.globalCompositeOperation='source-over';
-    // Redraw static is handled by resize, here just draw cars overlay
-    mctx.fillStyle='rgba(0,0,0,0.35)'; // subtle clear by drawing translucent rect
-    mctx.fillRect(0,0,mcv.width,mcv.height); // background
-    drawMiniStatic(); // redraw track quickly (it's cheap at this size)
-
-    // me
-    mctx.fillStyle='#ff4444';
-    mctx.beginPath(); mctx.arc(me.x*s+ox, me.y*s+oy, r, 0, Math.PI*2); mctx.fill();
-
-    // others
-    mctx.fillStyle='#44aaff';
-    for(const id in others){
-      const state = getInterpolatedState(others[id].history, now); if(!state) continue;
-      mctx.beginPath(); mctx.arc(state.x*s+ox, state.y*s+oy, r, 0, Math.PI*2); mctx.fill();
-    }
-    mctx.restore();
-  }
-
-  function renderBoard(){
-    const rows=[{name:me.name, best: me.bestLap}];
-    for(const id in others){ rows.push({name: others[id].name || ('P'+id.slice(-3)), best: others[id].bestLap}); }
-    rows.sort((a,b)=> (a.best??Infinity) - (b.best??Infinity));
-    boardEl.innerHTML = rows.map(r=>`<tr><td>${r.name}</td><td class="mono">${fmtMs(r.best)}</td></tr>`).join('');
-  }
-
-  // ======= Game Loop =======
-  let lastFrame=performance.now(); let lastSent=0;
-  let raceStarted=false;
-
-  function update(now){
-    const dt = (now - lastFrame)/1000; const frameScale=dt*60;
-
-    if(gameState===State.WAITING){
-      setStatus('Ready. Press Space to start countdown.');
-      if(me.keys[' '] || me.keys['Enter']){ startCountdown(); }
-    }
-
-    if(gameState===State.RACING){
-      const prevX=me.x, prevY=me.y;
-      if(me.keys['ArrowUp']||me.keys['w']||me.keys.up) me.speed += ACCEL*frameScale;
-      if(me.keys['ArrowDown']||me.keys['s']||me.keys.down) me.speed -= ACCEL*frameScale;
-      if(me.keys['ArrowLeft']||me.keys['a']||me.keys.left) me.angle -= TURN*frameScale;
-      if(me.keys['ArrowRight']||me.keys['d']||me.keys.right) me.angle += TURN*frameScale;
-
-      me.speed = Math.max(-MAX_SPEED*0.6, Math.min(MAX_SPEED, me.speed));
-
-      // Integrate
-      me.x += Math.cos(me.angle) * me.speed * frameScale;
-      me.y += Math.sin(me.angle) * me.speed * frameScale;
-
-      // Track effects
-      if(onTrack(me.x, me.y)){
-        me.speed *= Math.pow(FRICTION, frameScale);
-      } else {
-        // off-road: heavy drag
-        me.speed *= Math.pow(FRICTION*OFFROAD_DRAG, frameScale);
-      }
-
-      // Lap / checkpoints
-      tickLapIfNeeded(prevX, prevY);
-
-      // Publish state at ~20Hz
-      if(now - lastSent >= SEND_INTERVAL_MS){
-        channel.publish('player-state', { id: me.id, name: me.name, x: me.x, y: me.y, angle: me.angle });
-        lastSent = now;
-      }
-
-      // Cull stale remotes
-      for(const id in others){ if(now - others[id].lastSeen > 5000) delete others[id]; }
-
-      lapstatsEl.textContent = `Lap: ${me.lap}/${LAPS_TO_WIN} • Last: ${fmtMs(me.bestLap && (me.bestLap === (performance.now()-me.lapStart) ? null : null))} • Best: ${fmtMs(me.bestLap)}`;
-      speedEl.textContent = `Speed: ${Math.abs(me.speed).toFixed(1)}`;
-    }
-  }
-
-  function draw(now){
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    drawWorld();
-
-    // Cars
-    drawCar(me.x, me.y, me.angle, redCar);
-    for(const id in others){ const s=getInterpolatedState(others[id].history, now); if(s) drawCar(s.x, s.y, s.angle, blueCar); }
-
-    drawMini(now);
-  }
-
-  function loop(now){ update(now); draw(now); lastFrame=now; requestAnimationFrame(loop); }
-  requestAnimationFrame(loop);
-
-  // Initial UI
-  setStatus('Connecting…');
-  startCountdown(); // auto-start so it feels instant; press Space to retrigger
-  renderBoard();
-  </script>
+  // Minimap
+  mctx.clearRect(0,0,mini.width,mini.height);
+  mctx.fillStyle="#222"; mctx.fillRect(0,0,mini.width,mini.height);
+  // Track outline
+  mctx.strokeStyle="#fff"; mctx.lineWidth=2; mctx.beginPath(); mctx.moveTo(TRACK.path[0].x/15,TRACK.path[0].y/15);
+  for(let i=1;i<TRACK.path.length;i++) mctx.lineTo(TRACK.path[i].x/15,TRACK.path[i].y/15); mctx.closePath(); mctx.stroke();
+  // Cars
+  mctx.fillStyle="red"; mctx.fillRect(me.x/15-2,me.y/15-2,4,4);
+  mctx.fillStyle="blue"; for(const id in others){const s=getInterpolatedState(others[id].history,now); if(s)mctx.fillRect(s.x/15-2,s.y/15-2,4,4);}
+  
+  updateParticles();
+  lastFrame=now; requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
 </body>
 </html>

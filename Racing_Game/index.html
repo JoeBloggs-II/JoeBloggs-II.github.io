@@ -1,194 +1,516 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>Turbo Trackers Multiplayer</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8" />
+<title>Turbo Trackers — Arcade Drift Multiplayer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
-html, body { margin:0; overflow:hidden; background:#111; height:100%; }
-canvas { display:block; background:#222; width:100vw; height:100vh; }
-#hud { position:absolute; top:10px; left:50%; transform:translateX(-50%);
-       display:flex; gap:20px; color:white; font-family:sans-serif; font-size:16px; font-weight:bold; z-index:10; }
-.health-bar { width:120px; height:12px; background:#444; border:1px solid white; position:relative; }
-.health-fill { height:100%; background:lime; width:100%; }
-#deadScreen {
-  position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7);
-  display:flex; flex-direction:column; justify-content:center; align-items:center; color:white; font-family:sans-serif;
-  font-size:28px; font-weight:bold; z-index:20; display:none;
-}
+  html, body { margin:0; overflow:hidden; background:#111; height:100%; }
+  canvas { display:block; background:#202225; width:100vw; height:100vh; }
+  #hud {
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    display:flex; gap:16px; color:#fff; font-family:system-ui, sans-serif;
+    font-size:14px; font-weight:700; z-index:10; flex-wrap:wrap; justify-content:center;
+  }
+  .bar { display:flex; align-items:center; gap:6px; }
+  .bar .name { opacity:0.8; min-width:54px; text-align:right; }
+  .bar .track { width:140px; height:12px; background:#3a3d41; border:1px solid #9aa0a6; border-radius:6px; overflow:hidden; }
+  .bar .fill { height:100%; width:100%; background:linear-gradient(90deg, #33ff66, #aaff33); }
+
+  #deadScreen {
+    position:absolute; inset:0; display:none; z-index:20;
+    background:rgba(0,0,0,0.72); color:#fff; font-family:system-ui, sans-serif;
+    align-items:center; justify-content:center; flex-direction:column; gap:16px;
+    text-align:center; padding:24px;
+  }
+  #deadScreen .title { font-size:28px; font-weight:800; letter-spacing:0.5px; }
+  #deadScreen .sub { font-size:18px; opacity:0.9; }
 </style>
 </head>
 <body>
-<div id="hud"></div>
-<div id="deadScreen"><div id="killerText"></div><div id="respawnText"></div></div>
-<canvas id="game"></canvas>
-<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
-<script>
-const canvas=document.getElementById("game"), ctx=canvas.getContext("2d");
-function resize(){canvas.width=window.innerWidth; canvas.height=window.innerHeight;}
-window.addEventListener("resize",resize); resize();
+  <div id="hud"></div>
+  <div id="deadScreen">
+    <div class="title" id="killerText"></div>
+    <div class="sub" id="respawnText"></div>
+  </div>
+  <canvas id="game" width="1180" height="713"></canvas>
 
-// --- Assets ---
-const carImage=new Image(); carImage.src="assets/red_car.svg";
-const carOtherImage=new Image(); carOtherImage.src="assets/blue_car.svg";
+  <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+  <script>
+  // ===== Canvas =====
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+  addEventListener("resize", resize); resize();
 
-// --- Multiplayer ---
-const API_KEY="Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
-const ROOM="racing-room";
-const ably=new Ably.Realtime(API_KEY);
-const channel=ably.channels.get(ROOM);
+  // ===== Assets =====
+  const carMe = new Image(); carMe.src = "assets/red_car.svg";
+  const carOther = new Image(); carOther.src = "assets/blue_car.svg";
+  const CAR_W = 96, CAR_H = 47.6; // matches your SVG scale
 
-// --- Player state ---
-const me={id:Math.random().toString(36).substr(2,5), x:Math.random()*canvas.width, y:Math.random()*canvas.height,
-  angle:0, speed:0, health:100, keys:{}, stunned:0, dead:false, respawnTimer:0, killer:null};
-const others={}; // id -> { history:[], health, lastSeen, dead, respawnTimer, killer }
+  // ===== Networking (Ably) =====
+  const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
+  const ROOM = "racing-room";
+  const ably = new Ably.Realtime(API_KEY);
+  const channel = ably.channels.get(ROOM);
 
-// --- Dynamic HUD ---
-const hud=document.getElementById("hud");
-function updateHUD(){
-  hud.innerHTML="";
-  const players=[me, ...Object.values(others)];
-  players.forEach((p,i)=>{
-    const bar=document.createElement("div");
-    bar.innerHTML=`P${i+1} <div class="health-bar"><div class="health-fill" id="health-${p.id}"></div></div>`;
-    hud.appendChild(bar);
-  });
-}
+  // ===== Input =====
+  const meKeys = {};
+  const keyMap = {
+    ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right",
+    w:"up", a:"left", s:"down", d:"right", Shift:"drift"
+  };
+  addEventListener("keydown", e => { if (keyMap[e.key]) meKeys[keyMap[e.key]] = true; });
+  addEventListener("keyup",   e => { if (keyMap[e.key]) meKeys[keyMap[e.key]] = false; });
 
-// --- Input ---
-const keyMap={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right",Shift:"drift"};
-document.addEventListener("keydown",e=>{if(keyMap[e.key]) me.keys[keyMap[e.key]]=true;});
-document.addEventListener("keyup",e=>{if(keyMap[e.key]) me.keys[keyMap[e.key]]=false;});
-
-// --- Particle system ---
-const particles=[];
-class Particle{
-  constructor(x,y,color,size,life,velX,velY){this.x=x;this.y=y;this.color=color;this.size=size;this.life=life;this.velX=velX||0;this.velY=velY||0;}
-  update(){this.life--; this.x+=this.velX; this.y+=this.velY;}
-  draw(){ctx.fillStyle=this.color; ctx.globalAlpha=Math.max(0,this.life/30); ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;}
-}
-
-// --- Helpers ---
-function drawCar(x,y,angle,image){ctx.save(); ctx.translate(x,y); ctx.rotate(angle); ctx.drawImage(image,-48,-23.8,96,47.6); ctx.restore();}
-function pushHistory(id,sample){let o=others[id]; if(!o)o=others[id]={history:[],health:100,lastSeen:sample.time,dead:false,respawnTimer:0,killer:null}; o.history.push(sample); o.lastSeen=sample.time; if(o.history.length>20)o.history.shift();}
-function getInterpolatedState(history,now){if(!history||history.length===0)return null; const renderTime=now-120; for(let i=history.length-2;i>=0;i--){const older=history[i],newer=history[i+1]; if(older.time<=renderTime && renderTime<=newer.time){const t=(renderTime-older.time)/(newer.time-older.time||1); return {x:older.x+(newer.x-older.x)*t, y:older.y+(newer.y-older.y)*t, angle:older.angle+(newer.angle-older.angle)*t, speed:older.speed+(newer.speed-older.speed)*t};}} const last=history[history.length-1]; return last;}
-
-// --- Networking receive ---
-channel.subscribe("player-state",(msg)=>{
-  const {id,x,y,angle,speed,health,dead,respawnTimer,killer}=msg.data||{};
-  if(!id||id===me.id) return;
-  pushHistory(id,{x,y,angle,speed,time:performance.now()});
-  others[id].health=health;
-  others[id].dead=dead;
-  others[id].respawnTimer=respawnTimer||0;
-  others[id].killer=killer||null;
-  updateHUD();
-});
-
-// --- Collision detection ---
-function collideCars(c1,c2){
-  if(c1.dead||c2.dead) return;
-  const dx=c2.x-c1.x, dy=c2.y-c1.y, dist=Math.sqrt(dx*dx+dy*dy);
-  if(dist<60){
-    const dir=Math.atan2(dy,dx);
-    const diff=Math.abs((c1.angle-dir+Math.PI)%(2*Math.PI)-Math.PI);
-    const headOn=diff>Math.PI/3;
-    const impactSpeed=Math.abs(c1.speed-c2.speed);
-    let dmg=0;
-    if(headOn){ dmg=Math.floor(impactSpeed*20); c1.health-=dmg; c2.health-=dmg; c1.killer=c2.id; c2.killer=c1.id;}
-    else{ if(c1.speed>c2.speed){dmg=Math.floor(c1.speed*12); c2.health-=dmg; c2.killer=c1.id;} else if(c2.speed>c1.speed){dmg=Math.floor(c2.speed*12); c1.health-=dmg; c1.killer=c2.id;}}
-    const knock=10; c1.x-=Math.cos(dir)*knock; c1.y-=Math.sin(dir)*knock; c2.x+=Math.cos(dir)*knock; c2.y+=Math.sin(dir)*knock; c1.stunned=15; c2.stunned=15;
-    for(let i=0;i<15;i++)particles.push(new Particle(c1.x,c1.y,"orange",3,30,(Math.random()-0.5)*5,(Math.random()-0.5)*5));
-  }
-}
-
-// --- Respawn ---
-function respawnPlayer(p){
-  p.x=Math.random()*canvas.width; p.y=Math.random()*canvas.height; p.angle=0; p.speed=0; p.health=100; p.dead=false; p.stunned=0; p.killer=null;
-  for(let i=0;i<15;i++)particles.push(new Particle(p.x,p.y,"lime",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));
-}
-
-// --- Dead screen elements ---
-const deadScreen=document.getElementById("deadScreen");
-const killerText=document.getElementById("killerText");
-const respawnText=document.getElementById("respawnText");
-
-// --- Game loop ---
-let lastFrame=performance.now(), lastSent=0;
-updateHUD();
-function loop(now){
-  const dt=(now-lastFrame)/1000; const frameScale=dt*60;
-
-  // Local player
-  if(me.dead){
-    deadScreen.style.display="flex";
-    respawnText.textContent=`Respawning in ${Math.ceil(me.respawnTimer)}...`;
-  }else deadScreen.style.display="none";
-
-  if(me.dead){ me.respawnTimer-=dt; if(me.respawnTimer<=0) respawnPlayer(me);}
-  else{
-    if(me.stunned>0){me.stunned--; me.speed*=0.95;}
-    else{
-      // Arcade turning physics
-      if(me.keys.up){ me.speed+=0.25*frameScale; particles.push(new Particle(me.x,me.y,"white",2,15,(Math.random()-0.5)*1,(Math.random()-0.5)*1));}
-      if(me.keys.down) me.speed-=0.15*frameScale;
-      const turnFactor=0.03*Math.max(me.speed,1);
-      if(me.keys.left) me.angle-=turnFactor*frameScale;
-      if(me.keys.right) me.angle+=turnFactor*frameScale;
-      // Drifting
-      if(me.keys.drift && me.speed>1){for(let i=0;i<2;i++)particles.push(new Particle(me.x,me.y,"yellow",2,15,(Math.random()-0.5)*2,(Math.random()-0.5)*2));}
+  // ===== Particles =====
+  const particles = [];
+  class Particle {
+    constructor(x,y, size, life, vx, vy, color){
+      this.x=x; this.y=y; this.size=size; this.life=life; this.vx=vx||0; this.vy=vy||0; this.color=color||"white"; this.maxLife=life;
     }
-    me.speed*=0.96; me.speed=Math.max(Math.min(me.speed,6),-3);
-    me.x+=Math.cos(me.angle)*me.speed*frameScale;
-    me.y+=Math.sin(me.angle)*me.speed*frameScale;
+    update(){
+      this.life--;
+      this.x += this.vx; this.y += this.vy;
+    }
+    draw(){
+      ctx.globalAlpha = Math.max(0, this.life / this.maxLife);
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+  function burst(x,y, count, baseSpeed, color, size=3, life=30){
+    for(let i=0;i<count;i++){
+      const a = Math.random()*Math.PI*2;
+      const s = baseSpeed*(0.4+0.6*Math.random());
+      particles.push(new Particle(x,y, size*(0.8+Math.random()*0.6), life+Math.floor(Math.random()*10),
+        Math.cos(a)*s, Math.sin(a)*s, color));
+    }
   }
 
-  // Wrap screen
-  if(me.x<-60) me.x=canvas.width+60; if(me.x>canvas.width+60) me.x=-60;
-  if(me.y<-60) me.y=canvas.height+60; if(me.y>canvas.height+60) me.y=-60;
+  // ===== Player / Physics =====
+  function rand(start, end){ return start + Math.random()*(end-start); }
+  const ID = Math.random().toString(36).slice(2,7);
 
-  // Update others
-  for(const id in others){
-    const o=others[id];
-    const s=getInterpolatedState(o.history,now);
-    if(s){o.x=s.x;o.y=s.y;o.angle=s.angle;o.speed=s.speed;}
-    if(now-o.lastSeen>3000) delete others[id];
-    if(o.dead){o.respawnTimer-=dt; if(o.respawnTimer<=0) respawnPlayer(o);}
+  function makePlayer(isMe){
+    return {
+      id: isMe ? ID : "?", name: isMe ? "You" : "P",
+      x: rand(CAR_W, canvas.width-CAR_W), y: rand(CAR_H, canvas.height-CAR_H),
+      angle: 0, // where the car points
+      vx: 0, vy: 0, // actual velocity vector
+      speedCapFwd: 7.0,
+      speedCapBack: -3.0,
+      accel: 0.25, // per 60fps frame
+      brake: 0.18,
+      baseTurn: 0.018,  // normal turning — calm
+      driftTurn: 0.035, // extra turn when drifting
+      gripLong: 0.985,  // forward grip
+      gripLat: 0.80,    // lateral damping (normal driving)
+      gripLatDrift: 0.92, // higher = less lateral damping -> more slide
+      drag: 0.992,      // air drag
+      drift: false,
+      health: 100,
+      dead: false,
+      stunned: 0,
+      respawnTimer: 0,
+      killer: null,
+      lastHitBy: null, // track last collider id
+    };
   }
 
-  // Collisions
-  for(const id in others) collideCars(me, others[id]);
+  const me = makePlayer(true);
+  const remotes = {}; // id -> {state/history/ui}
+  const HISTORY = 24, INTERP_DELAY = 120, SEND_MS = 50;
 
-  // Check death
-  if(me.health<=0 && !me.dead){me.dead=true; me.speed=0; me.respawnTimer=5; killerText.textContent=`You were killed by Player ${me.killer||"?"}`; for(let i=0;i<25;i++)particles.push(new Particle(me.x,me.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
-  for(const id in others){
-    const o=others[id];
-    if(o.health<=0 && !o.dead){o.dead=true; o.speed=0; o.respawnTimer=5; for(let i=0;i<25;i++)particles.push(new Particle(o.x,o.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
+  // Interp helpers
+  function pushHistory(o, snap){
+    if(!o.history) o.history = [];
+    o.history.push(snap);
+    if(o.history.length > HISTORY) o.history.shift();
+    o.lastSeen = performance.now();
+  }
+  function getInterpolatedState(history, now){
+    if(!history || !history.length) return null;
+    const rt = now - INTERP_DELAY;
+    if(rt <= history[0].t) return history[0];
+    for(let i=history.length-2;i>=0;i--){
+      const a = history[i], b = history[i+1];
+      if(a.t <= rt && rt <= b.t){
+        const f = (rt - a.t) / Math.max(1, b.t - a.t);
+        return {
+          x: a.x + (b.x-a.x)*f,
+          y: a.y + (b.y-a.y)*f,
+          angle: a.angle + (b.angle-a.angle)*f,
+          vx: a.vx + (b.vx-a.vx)*f,
+          vy: a.vy + (b.vy-a.vy)*f,
+          speed: a.speed + (b.speed-a.speed)*f,
+          t: rt
+        };
+      }
+    }
+    return history[history.length-1];
   }
 
-  // Draw
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  if(!me.dead) drawCar(me.x,me.y,me.angle,carImage);
-  for(const id in others) if(!others[id].dead) drawCar(others[id].x,others[id].y,others[id].angle,carOtherImage);
+  // ===== HUD (dynamic) =====
+  const hud = document.getElementById("hud");
+  function rebuildHUD(){
+    hud.innerHTML = "";
+    const everyone = [me, ...Object.values(remotes).map(r=>r.state)];
+    everyone.forEach((p, i)=>{
+      const wrap = document.createElement("div");
+      wrap.className = "bar";
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = (p.id===me.id? "You" : p.id).slice(0,6);
+      const track = document.createElement("div"); track.className = "track";
+      const fill = document.createElement("div"); fill.className = "fill"; fill.id = "hp-"+p.id;
+      track.appendChild(fill);
+      wrap.appendChild(name); wrap.appendChild(track);
+      hud.appendChild(wrap);
+    });
+  }
 
-  // Particles
-  for(let i=particles.length-1;i>=0;i--){particles[i].update(); particles[i].draw(); if(particles[i].life<=0) particles.splice(i,1);}
+  function updateHUDValues(){
+    const setFill = (id, hp)=>{
+      const el = document.getElementById("hp-"+id);
+      if(el) el.style.width = Math.max(0, Math.min(100, hp)) + "%";
+    };
+    setFill(me.id, me.health);
+    for(const id in remotes) setFill(id, remotes[id].state.health);
+  }
 
-  // HUD
-  updateHUD();
-  document.querySelectorAll(".health-fill").forEach(f=>{
-    const id=f.id.split("-")[1];
-    if(id===me.id) f.style.width=Math.max(0,me.health)+"%";
-    else if(others[id]) f.style.width=Math.max(0,others[id].health)+"%";
+  // ===== Dead overlay =====
+  const deadScreen = document.getElementById("deadScreen");
+  const killerText = document.getElementById("killerText");
+  const respawnText = document.getElementById("respawnText");
+
+  function showDeadOverlay(show){
+    deadScreen.style.display = show ? "flex" : "none";
+  }
+
+  // ===== Drawing =====
+  function drawCar(x, y, angle, slip, image){
+    // slip: lateral slip amount -> slight yaw for visuals
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle + slip * 0.1); // small visual yaw with slip
+    ctx.drawImage(image, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H);
+    ctx.restore();
+  }
+
+  // ===== Physics Update (local player) =====
+  function updateLocal(dt, now){
+    const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
+    const sideX = -fwdY, sideY = fwdX;
+
+    // input
+    if(!me.dead){
+      if(me.stunned > 0){
+        me.stunned -= dt*60;
+      } else {
+        if(meKeys.up){
+          me.vx += fwdX * me.accel * 60 * dt;
+          me.vy += fwdY * me.accel * 60 * dt;
+          // tiny exhaust
+          if(Math.random() < 0.4){
+            particles.push(new Particle(
+              me.x - fwdX*20 + (Math.random()-0.5)*6,
+              me.y - fwdY*20 + (Math.random()-0.5)*6,
+              2, 16, (-fwdX + (Math.random()-0.5))*0.6, (-fwdY + (Math.random()-0.5))*0.6, "rgba(220,220,220,1)"
+            ));
+          }
+        }
+        if(meKeys.down){
+          me.vx -= fwdX * me.brake * 60 * dt * 0.7;
+          me.vy -= fwdY * me.brake * 60 * dt * 0.7;
+        }
+
+        // turning
+        const speed = Math.hypot(me.vx, me.vy);
+        const turnBase = me.baseTurn * (0.6 + 0.4*Math.min(1, speed/6)); // calmer base turn
+        const drifting = !!meKeys.drift && speed > 1.2;
+        me.drift = drifting;
+
+        const turn = drifting ? (turnBase + me.driftTurn) : turnBase;
+        if(meKeys.left)  me.angle -= turn * 60 * dt;
+        if(meKeys.right) me.angle += turn * 60 * dt;
+
+        // sparks when drifting hard (based on slip)
+        if(drifting){
+          // sideways force to promote slide
+          me.vx += sideX * 0.06 * 60 * dt;
+          me.vy += sideY * 0.06 * 60 * dt;
+        }
+      }
+    }
+
+    // Decompose velocity into longitudinal & lateral
+    const vLong = me.vx * fwdX + me.vy * fwdY;   // along car forward
+    const vLat  = me.vx * sideX + me.vy * sideY; // sideways (slip)
+
+    // Caps
+    const cappedLong = Math.max(me.speedCapBack, Math.min(me.speedCapFwd, vLong));
+
+    // Grip & drag
+    const latGrip = me.drift ? me.gripLatDrift : me.gripLat; // higher = less reduction -> more slide
+    const newVLong = cappedLong * me.gripLong;
+    const newVLat  = vLat * latGrip;
+
+    // Recompose
+    me.vx = fwdX * newVLong + sideX * newVLat;
+    me.vy = fwdY * newVLong + sideY * newVLat;
+
+    // Global drag
+    me.vx *= me.drag;
+    me.vy *= me.drag;
+
+    // Move
+    me.x += me.vx * 60 * dt;
+    me.y += me.vy * 60 * dt;
+
+    // Wrap
+    const margin = 60;
+    if(me.x < -margin) me.x = canvas.width + margin;
+    if(me.x > canvas.width + margin) me.x = -margin;
+    if(me.y < -margin) me.y = canvas.height + margin;
+    if(me.y > canvas.height + margin) me.y = -margin;
+
+    // Drift sparks based on slip magnitude
+    const slipMag = Math.abs(vLat);
+    if(me.drift && slipMag > 0.6 && Math.random() < 0.5){
+      const backX = me.x - fwdX * 26, backY = me.y - fwdY * 26;
+      burst(backX, backY, 1, 1.4, "orange", 2, 14);
+    }
+
+    return slipMag;
+  }
+
+  // ===== Collisions =====
+  function carRadius(){ return Math.max(CAR_W, CAR_H)*0.45; }
+  function collideLocalWithRemote(remoteState){
+    if(me.dead || remoteState.dead) return;
+
+    const dx = remoteState.x - me.x, dy = remoteState.y - me.y;
+    const dist = Math.hypot(dx, dy);
+    const r = carRadius()*0.9 + carRadius()*0.9;
+    if(dist > r) return;
+
+    // Normal from me -> them
+    const nX = dx / (dist || 1), nY = dy / (dist || 1);
+
+    // Determine faces
+    const mF = [Math.cos(me.angle), Math.sin(me.angle)];
+    const oF = [Math.cos(remoteState.angle), Math.sin(remoteState.angle)];
+
+    // Are we facing each other?
+    const facing = mF[0]*oF[0] + mF[1]*oF[1]; // dot of forwards
+    const meFacingThem = mF[0]*nX + mF[1]*nY;   // >0 means my front toward them
+    const themFacingMe = -(oF[0]*nX + oF[1]*nY); // >0 means their front toward me
+
+    const meSpeed = Math.hypot(me.vx, me.vy);
+    const themSpeed = Math.hypot(remoteState.vx||0, remoteState.vy||0);
+    const combined = meSpeed + themSpeed;
+
+    // Impact category
+    let headOn = (meFacingThem > 0.6 && themFacingMe > 0.6 && facing < -0.2);
+    // Side/back resolution for damage target
+    const hitTheirSide = Math.abs(oF[0]*nX + oF[1]*nY) < 0.35; // normal near their side
+    const hitTheirBack = (oF[0]*nX + oF[1]*nY) < -0.6;
+
+    // Damage numbers
+    let dmgMe = 0, dmgThem = 0;
+    if(headOn){
+      const scale = Math.max(0, combined*2.4); // scale with combined speed
+      if(combined > 11) { dmgMe = 999; dmgThem = 999; } // instant KO
+      else { dmgMe = Math.floor(scale); dmgThem = Math.floor(scale); }
+    } else {
+      // I hit them with my front?
+      if(meFacingThem > 0.4){
+        if(hitTheirSide) dmgThem = Math.floor(meSpeed * 14); // side = more
+        else if(hitTheirBack) dmgThem = Math.floor(meSpeed * 8); // back = less
+        else dmgThem = Math.floor(meSpeed * 10); // front-ish
+      }
+      // They hit me with their front?
+      if(themFacingMe > 0.4){
+        if(Math.abs(oF[0]*nX + oF[1]*nY) < 0.35) dmgMe = Math.floor(themSpeed * 14);
+        else if((oF[0]*nX + oF[1]*nY) < -0.6)    dmgMe = Math.floor(themSpeed * 8);
+        else dmgMe = Math.floor(themSpeed * 10);
+      }
+    }
+
+    // Apply damage (local prediction — authoritative for me)
+    if(dmgThem > 0){ /* we only predict their health visually */
+      const o = remotes[remoteState.id];
+      if(o){ o.state.health = Math.max(0, o.state.health - dmgThem); o.state.killer = me.id; }
+    }
+    if(dmgMe > 0){
+      me.health = Math.max(0, me.health - dmgMe);
+      me.killer = remoteState.id;
+    }
+
+    // Knockback impulse along normal (separate from damage)
+    const impulse = Math.min(14, 6 + combined*0.7);
+    me.vx -= nX * impulse; me.vy -= nY * impulse;
+    // fake remote knockback locally for visuals
+    if(remotes[remoteState.id]){
+      const rs = remotes[remoteState.id].state;
+      rs.vx += nX * impulse; rs.vy += nY * impulse;
+    }
+
+    // Stun
+    me.stunned = 12;
+
+    // Crash particles
+    burst(me.x + nX*20, me.y + nY*20, 14, 4.2, "orange", 3, 30);
+    burst(me.x + nX*20, me.y + nY*20, 6, 2.4, "yellow", 2, 20);
+  }
+
+  // ===== Respawn =====
+  function respawn(p){
+    p.x = rand(CAR_W, canvas.width-CAR_W);
+    p.y = rand(CAR_H, canvas.height-CAR_H);
+    p.vx = p.vy = 0;
+    p.angle = rand(0, Math.PI*2);
+    p.health = 100;
+    p.dead = false;
+    p.stunned = 0;
+    p.killer = null;
+    burst(p.x, p.y, 16, 3.5, "lime", 4, 36);
+  }
+
+  // ===== Networking receive =====
+  channel.subscribe("player-state", (msg) => {
+    const d = msg.data || {};
+    if(!d.id || d.id === me.id) return;
+
+    let obj = remotes[d.id];
+    if(!obj){
+      obj = remotes[d.id] = {
+        state: makePlayer(false), history: [], lastSeen: performance.now()
+      };
+      obj.state.id = d.id;
+      obj.state.name = d.id;
+      rebuildHUD();
+    }
+    obj.state.health = d.health;
+    obj.state.dead = d.dead;
+    obj.state.respawnTimer = d.respawnTimer || 0;
+    obj.state.killer = d.killer || null;
+
+    pushHistory(obj, {
+      x: d.x, y: d.y, angle: d.angle, vx: d.vx, vy: d.vy,
+      speed: d.speed, t: performance.now()
+    });
   });
 
-  // Send state
-  if(now-lastSent>50){channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle,speed:me.speed,health:me.health,dead:me.dead,respawnTimer:me.respawnTimer,killer:me.killer}); lastSent=now;}
+  // ===== Draw Loop =====
+  let lastSent = 0, last = performance.now();
+  rebuildHUD();
 
-  lastFrame=now;
+  function loop(now){
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    // Update local physics
+    let slip = 0;
+    if(!me.dead){
+      slip = updateLocal(dt, now);
+    } else {
+      me.respawnTimer -= dt;
+      if(me.respawnTimer <= 0) respawn(me);
+    }
+
+    // Update remotes via interpolation
+    for(const id in remotes){
+      const o = remotes[id];
+      if(now - o.lastSeen > 5000){ delete remotes[id]; rebuildHUD(); continue; }
+      const s = getInterpolatedState(o.history, now);
+      if(s){
+        o.state.x = s.x; o.state.y = s.y; o.state.angle = s.angle; o.state.vx = s.vx; o.state.vy = s.vy;
+      }
+      if(o.state.dead){
+        o.state.respawnTimer -= dt;
+        if(o.state.respawnTimer <= 0){
+          // visually revive on our client when time elapses (serverless)
+          respawn(o.state);
+        }
+      }
+    }
+
+    // Collisions (local against all visible remotes)
+    for(const id in remotes){
+      const s = remotes[id].state;
+      if(!s.dead) collideLocalWithRemote(s);
+    }
+
+    // Death check for me
+    if(me.health <= 0 && !me.dead){
+      me.dead = true;
+      me.vx = me.vy = 0;
+      me.respawnTimer = 5;
+      const killerName = me.killer ? (me.killer.slice(0,6)) : "Unknown";
+      document.getElementById("killerText").textContent = `You were killed by ${killerName}`;
+      burst(me.x, me.y, 28, 5.0, "red", 4, 44);
+    }
+
+    // Draw
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // Particles behind everything (exhaust, drift)
+    for(let i=particles.length-1;i>=0;i--){
+      particles[i].update(); particles[i].draw();
+      if(particles[i].life <= 0) particles.splice(i,1);
+    }
+
+    // Cars
+    if(!me.dead){
+      const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
+      const sideX = -fwdY, sideY = fwdX;
+      const vLat = me.vx*sideX + me.vy*sideY;
+      drawCar(me.x, me.y, me.angle, vLat, carMe);
+    }
+
+    for(const id in remotes){
+      const r = remotes[id].state;
+      if(r.dead) continue;
+      const fwdX = Math.cos(r.angle), fwdY = Math.sin(r.angle);
+      const sideX = -fwdY, sideY = fwdX;
+      const vLat = (r.vx||0)*sideX + (r.vy||0)*sideY;
+      drawCar(r.x, r.y, r.angle, vLat, carOther);
+    }
+
+    // Dead overlay for me
+    if(me.dead){
+      showDeadOverlay(true);
+      document.getElementById("respawnText").textContent = `Respawning in ${Math.ceil(me.respawnTimer)}…`;
+    } else {
+      showDeadOverlay(false);
+    }
+
+    // HUD widths
+    updateHUDValues();
+
+    // Send network state
+    if(now - lastSent > SEND_MS){
+      channel.publish("player-state", {
+        id: me.id,
+        x: me.x, y: me.y, angle: me.angle,
+        vx: me.vx, vy: me.vy,
+        speed: Math.hypot(me.vx, me.vy),
+        health: me.health,
+        dead: me.dead,
+        respawnTimer: me.respawnTimer,
+        killer: me.killer
+      });
+      lastSent = now;
+    }
+
+    requestAnimationFrame(loop);
+  }
   requestAnimationFrame(loop);
-}
-requestAnimationFrame(loop);
-</script>
+  </script>
 </body>
 </html>

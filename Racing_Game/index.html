@@ -158,6 +158,17 @@ channel.subscribe("chat", msg => {
     }
   }
 
+  // ===== World / Map =====
+  const WORLD_W = 3000;
+  const WORLD_H = 2000;
+
+  // Example obstacles
+  const obstacles = [
+  {x:400, y:300, w:120, h:60},
+  {x:900, y:600, w:200, h:40},
+  {x:1600, y:1200, w:100, h:150}
+  ];
+
   // ===== Player / Physics =====
   function rand(start, end){ return start + Math.random()*(end-start); }
   const ID = Math.random().toString(36).slice(2,7);
@@ -473,6 +484,15 @@ channel.subscribe("chat", msg => {
     });
   });
 
+  function getCameraOffset() {
+      let camX = me.x - canvas.width/2;
+      let camY = me.y - canvas.height/2;
+      camX = Math.max(0, Math.min(camX, WORLD_W - canvas.width));
+      camY = Math.max(0, Math.min(camY, WORLD_H - canvas.height));
+      return {camX, camY};
+  }
+
+    
   // ===== Draw Loop =====
   let lastSent = 0, last = performance.now();
   rebuildHUD();
@@ -524,56 +544,83 @@ channel.subscribe("chat", msg => {
     }
 
     // Draw
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // ===== Draw =====
+ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    // Particles behind everything (exhaust, drift)
-    for(let i=particles.length-1;i>=0;i--){
-      particles[i].update(); particles[i].draw();
-      if(particles[i].life <= 0) particles.splice(i,1);
-    }
+const {camX, camY} = getCameraOffset();
+ctx.save();
+ctx.translate(-camX, -camY);
 
-    // Cars
-    if(!me.dead){
-      const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
-      const sideX = -fwdY, sideY = fwdX;
-      const vLat = me.vx*sideX + me.vy*sideY;
-      drawCar(me.x, me.y, me.angle, vLat, carMe);
-    }
+// Draw background
+ctx.fillStyle = "#202225";
+ctx.fillRect(0,0,WORLD_W,WORLD_H);
 
+// Draw obstacles
+ctx.fillStyle = "#555";
+obstacles.forEach(o=>{
+    ctx.fillRect(o.x, o.y, o.w, o.h);
+});
+
+// Particles
+for(let i=particles.length-1;i>=0;i--){
+    particles[i].update(); particles[i].draw();
+    if(particles[i].life <= 0) particles.splice(i,1);
+}
+
+// Cars
+if(!me.dead){
+    const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
+    const sideX = -fwdY, sideY = fwdX;
+    const vLat = me.vx*sideX + me.vy*sideY;
+    drawCar(me.x, me.y, me.angle, vLat, carMe);
+}
+for(const id in remotes){
+    const r = remotes[id].state;
+    if(r.dead) continue;
+    const fwdX = Math.cos(r.angle), fwdY = Math.sin(r.angle);
+    const sideX = -fwdY, sideY = fwdX;
+    const vLat = (r.vx||0)*sideX + (r.vy||0)*sideY;
+    drawCar(r.x, r.y, r.angle, vLat, carOther);
+}
+
+ctx.restore();
+
+// Radar (HUD overlay)
+(function drawRadar(){
+    const radarRadius = 60;
+    const centerX = canvas.width - 80;
+    const centerY = 80;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radarRadius, 0, Math.PI*2);
+    ctx.fill();
+
+    // Local player in center
+    ctx.fillStyle = "lime";
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 4, 0, Math.PI*2);
+    ctx.fill();
+
+    // Nearby players
     for(const id in remotes){
-      const r = remotes[id].state;
-      if(r.dead) continue;
-      const fwdX = Math.cos(r.angle), fwdY = Math.sin(r.angle);
-      const sideX = -fwdY, sideY = fwdX;
-      const vLat = (r.vx||0)*sideX + (r.vy||0)*sideY;
-      drawCar(r.x, r.y, r.angle, vLat, carOther);
+        const r = remotes[id].state;
+        if(r.dead) continue;
+        const dx = r.x - me.x;
+        const dy = r.y - me.y;
+        const dist = Math.hypot(dx, dy);
+        const maxRadarDist = 300;
+        if(dist <= maxRadarDist){
+            const rx = centerX + dx / maxRadarDist * radarRadius;
+            const ry = centerY + dy / maxRadarDist * radarRadius;
+            ctx.fillStyle = "red";
+            ctx.beginPath();
+            ctx.arc(rx, ry, 4, 0, Math.PI*2);
+            ctx.fill();
+        }
     }
-
-    // Dead overlay for me
-    if(me.dead){
-      showDeadOverlay(true);
-      document.getElementById("respawnText").textContent = `Respawning in ${Math.ceil(me.respawnTimer)}…`;
-    } else {
-      showDeadOverlay(false);
-    }
-
-    // HUD widths
-    updateHUDValues();
-
-    // Send network state
-    if(now - lastSent > SEND_MS){
-      channel.publish("player-state", {
-        id: me.id,
-        x: me.x, y: me.y, angle: me.angle,
-        vx: me.vx, vy: me.vy,
-        speed: Math.hypot(me.vx, me.vy),
-        health: me.health,
-        dead: me.dead,
-        respawnTimer: me.respawnTimer,
-        killer: me.killer
-      });
-      lastSent = now;
-    }
+    ctx.restore();
+})();
 
     requestAnimationFrame(loop);
   }

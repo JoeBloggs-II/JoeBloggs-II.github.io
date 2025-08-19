@@ -7,25 +7,13 @@
 <style>
   html, body { margin: 0; overflow: hidden; background: #111; height: 100%; }
   canvas { display: block; background: #222; width: 100vw; height: 100vh; }
-  #hud {
-    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-    display: flex; gap: 40px; color: white; font-family: sans-serif;
-    font-size: 18px; font-weight: bold; z-index: 10;
-  }
-  .health-bar {
-    width: 120px; height: 12px; background: #444; border: 1px solid white;
-    position: relative;
-  }
-  .health-fill {
-    height: 100%; background: lime; width: 100%;
-  }
+  #hud { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; color: white; font-family: sans-serif; font-size: 16px; font-weight: bold; z-index: 10; }
+  .health-bar { width: 120px; height: 12px; background: #444; border: 1px solid white; position: relative; }
+  .health-fill { height: 100%; background: lime; width: 100%; }
 </style>
 </head>
 <body>
-<div id="hud">
-  <div>P1 <div class="health-bar"><div class="health-fill" id="p1Health"></div></div></div>
-  <div>P2 <div class="health-bar"><div class="health-fill" id="p2Health"></div></div></div>
-</div>
+<div id="hud"></div>
 <canvas id="game"></canvas>
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 <script>
@@ -36,10 +24,8 @@ window.addEventListener("resize", resize);
 resize();
 
 // --- Assets ---
-const carImage = new Image();
-carImage.src = "assets/red_car.svg";
-const carOtherImage = new Image();
-carOtherImage.src = "assets/blue_car.svg";
+const carImage = new Image(); carImage.src = "assets/red_car.svg";
+const carOtherImage = new Image(); carOtherImage.src = "assets/blue_car.svg";
 
 // --- Multiplayer ---
 const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
@@ -48,8 +34,20 @@ const ably = new Ably.Realtime(API_KEY);
 const channel = ably.channels.get(ROOM);
 
 // --- Player state ---
-const me = { id: Math.random().toString(36).substr(2,5), x: Math.random()*canvas.width, y: Math.random()*canvas.height, angle: 0, speed: 0, health:100, keys:{}, stunned:0 };
-const others = {}; // id -> { history: [{x,y,angle,speed,time}], health, lastSeen }
+const me = { id: Math.random().toString(36).substr(2,5), x: Math.random()*canvas.width, y: Math.random()*canvas.height, angle: 0, speed: 0, health:100, keys:{}, stunned:0, dead:false };
+const others = {}; // id -> { history: [{x,y,angle,speed,time}], health, lastSeen, dead:false }
+
+// --- Dynamic HUD ---
+const hud = document.getElementById("hud");
+function updateHUD(){
+  hud.innerHTML = "";
+  const players = [me, ...Object.values(others)];
+  players.forEach((p,i)=>{
+    const bar = document.createElement("div");
+    bar.innerHTML = `P${i+1} <div class="health-bar"><div class="health-fill" id="health-${p.id}"></div></div>`;
+    hud.appendChild(bar);
+  });
+}
 
 // --- Input ---
 const keyMap = {ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right",Shift:"drift"};
@@ -58,29 +56,31 @@ document.addEventListener("keyup", e=>{if(keyMap[e.key]) me.keys[keyMap[e.key]]=
 
 // --- Particle system ---
 const particles = [];
-class Particle {
-  constructor(x,y,color,size,life,velX,velY){this.x=x;this.y=y;this.color=color;this.size=size;this.life=life;this.velX=velX||0;this.velY=velY||0;}
-  update(){this.life--; this.x+=this.velX; this.y+=this.velY;}
-  draw(){ctx.fillStyle=this.color; ctx.globalAlpha=this.life/30; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;}
-}
+class Particle { constructor(x,y,color,size,life,velX,velY){this.x=x;this.y=y;this.color=color;this.size=size;this.life=life;this.velX=velX||0;this.velY=velY||0;} update(){this.life--; this.x+=this.velX; this.y+=this.velY;} draw(){ctx.fillStyle=this.color; ctx.globalAlpha=this.life/30; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;}}
 
 // --- Helpers ---
 function drawCar(x,y,angle,image){ctx.save(); ctx.translate(x,y); ctx.rotate(angle); ctx.drawImage(image,-48,-23.8,96,47.6); ctx.restore();}
-function pushHistory(id,sample){let o=others[id]; if(!o)o=others[id]={history:[],health:100,lastSeen:sample.time}; o.history.push(sample); o.lastSeen=sample.time; if(o.history.length>20)o.history.shift();}
+function pushHistory(id,sample){let o=others[id]; if(!o)o=others[id]={history:[],health:100,lastSeen:sample.time,dead:false}; o.history.push(sample); o.lastSeen=sample.time; if(o.history.length>20)o.history.shift();}
 function getInterpolatedState(history,now){if(!history||history.length===0)return null; const renderTime=now-120; for(let i=history.length-2;i>=0;i--){const older=history[i],newer=history[i+1]; if(older.time<=renderTime && renderTime<=newer.time){const t=(renderTime-older.time)/(newer.time-older.time||1); return {x:older.x+(newer.x-older.x)*t, y:older.y+(newer.y-older.y)*t, angle:older.angle+(newer.angle-older.angle)*t, speed:older.speed+(newer.speed-older.speed)*t};}} const last=history[history.length-1]; return last;}
 
 // --- Networking receive ---
-channel.subscribe("player-state",(msg)=>{const{ id,x,y,angle,speed,health}=msg.data||{}; if(!id||id===me.id) return; pushHistory(id,{x,y,angle,speed,time:performance.now()}); others[id].health=health;});
+channel.subscribe("player-state",(msg)=>{
+  const {id,x,y,angle,speed,health,dead} = msg.data||{};
+  if(!id||id===me.id) return;
+  pushHistory(id,{x,y,angle,speed,time:performance.now()});
+  others[id].health=health;
+  others[id].dead=dead;
+  updateHUD();
+});
 
 // --- Collision detection ---
 function collideCars(c1,c2){
-  const dx=c2.x-c1.x, dy=c2.y-c1.y;
-  const dist=Math.sqrt(dx*dx+dy*dy);
+  if(c1.dead || c2.dead) return;
+  const dx=c2.x-c1.x, dy=c2.y-c1.y, dist=Math.sqrt(dx*dx+dy*dy);
   if(dist<60){
-    // Determine collision type
     const dir=Math.atan2(dy,dx);
     const diff=Math.abs((c1.angle-dir+Math.PI)%(2*Math.PI)-Math.PI);
-    const headOn=diff>Math.PI/3; // approx
+    const headOn=diff>Math.PI/3;
     const impactSpeed=Math.abs(c1.speed-c2.speed);
 
     if(headOn){
@@ -91,45 +91,45 @@ function collideCars(c1,c2){
       else if(c2.speed>c1.speed) c1.health-=Math.floor(c2.speed*10);
     }
 
-    // Knockback
     const knock=10;
-    c1.x-=Math.cos(dir)*knock; c1.y-=Math.sin(dir)*knock; c2.x+=Math.cos(dir)*knock; c2.y+=Math.sin(dir)*knock;
+    c1.x-=Math.cos(dir)*knock; c1.y-=Math.sin(dir)*knock;
+    c2.x+=Math.cos(dir)*knock; c2.y+=Math.sin(dir)*knock;
     c1.stunned=15; c2.stunned=15;
 
-    // Particles
     for(let i=0;i<15;i++){particles.push(new Particle(c1.x,c1.y,"orange",3,30,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
   }
 }
 
 // --- Game loop ---
 let lastFrame=performance.now(), lastSent=0;
+updateHUD();
 function loop(now){
   const dt=(now-lastFrame)/1000;
   const frameScale=dt*60;
 
-  // Input → physics
-  if(me.stunned>0){me.stunned--; me.speed*=0.95;} else {
-    if(me.keys.up) me.speed+=0.25*frameScale;
-    if(me.keys.down) me.speed-=0.15*frameScale;
-    if(me.keys.left) me.angle-=0.04*frameScale*(me.speed/3);
-    if(me.keys.right) me.angle+=0.04*frameScale*(me.speed/3);
-    if(me.keys.drift){for(let i=0;i<2;i++)particles.push(new Particle(me.x,me.y,"yellow",2,15,(Math.random()-0.5)*2,(Math.random()-0.5)*2));}
+  // Update local player
+  if(!me.dead){
+    if(me.stunned>0){me.stunned--; me.speed*=0.95;} else {
+      if(me.keys.up) { me.speed+=0.25*frameScale; for(let i=0;i<1;i++)particles.push(new Particle(me.x,me.y,"white",2,15,(Math.random()-0.5)*1,(Math.random()-0.5)*1)); }
+      if(me.keys.down) me.speed-=0.15*frameScale;
+      if(me.keys.left) me.angle-=0.04*frameScale*(me.speed/3);
+      if(me.keys.right) me.angle+=0.04*frameScale*(me.speed/3);
+      if(me.keys.drift){for(let i=0;i<2;i++)particles.push(new Particle(me.x,me.y,"yellow",2,15,(Math.random()-0.5)*2,(Math.random()-0.5)*2));}
+    }
+
+    me.speed*=0.96;
+    me.speed=Math.max(Math.min(me.speed,6),-3);
+    me.x+=Math.cos(me.angle)*me.speed*frameScale;
+    me.y+=Math.sin(me.angle)*me.speed*frameScale;
   }
 
-  // Friction & speed cap
-  me.speed*=0.96;
-  me.speed=Math.max(Math.min(me.speed,6),-3);
-
-  me.x+=Math.cos(me.angle)*me.speed*frameScale;
-  me.y+=Math.sin(me.angle)*me.speed*frameScale;
-
-  // Wrap around screen
+  // Screen wrap
   if(me.x<-60) me.x=canvas.width+60;
   if(me.x>canvas.width+60) me.x=-60;
   if(me.y<-60) me.y=canvas.height+60;
   if(me.y>canvas.height+60) me.y=-60;
 
-  // Update others (interpolation)
+  // Update others
   for(const id in others){
     const s=getInterpolatedState(others[id].history,now);
     if(s){others[id].x=s.x; others[id].y=s.y; others[id].angle=s.angle; others[id].speed=s.speed;}
@@ -139,23 +139,30 @@ function loop(now){
   // Collisions
   for(const id in others) collideCars(me, others[id]);
 
+  // Check dying
+  if(me.health<=0 && !me.dead){me.dead=true; me.speed=0; for(let i=0;i<25;i++)particles.push(new Particle(me.x,me.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
+  for(const id in others){
+    if(others[id].health<=0 && !others[id].dead){others[id].dead=true; for(let i=0;i<25;i++)particles.push(new Particle(others[id].x,others[id].y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
+  }
+
   // Draw
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  drawCar(me.x,me.y,me.angle,carImage);
-  for(const id in others) drawCar(others[id].x,others[id].y,others[id].angle,carOtherImage);
+  if(!me.dead) drawCar(me.x,me.y,me.angle,carImage);
+  for(const id in others) if(!others[id].dead) drawCar(others[id].x,others[id].y,others[id].angle,carOtherImage);
 
-  // Update particles
+  // Particles
   for(let i=particles.length-1;i>=0;i--){particles[i].update(); particles[i].draw(); if(particles[i].life<=0)particles.splice(i,1);}
 
   // Update HUD
-  document.getElementById("p1Health").style.width=Math.max(0,me.health)+"%";
-  for(const id in others){document.getElementById("p2Health").style.width=Math.max(0,others[id].health)+"%"; break;}
+  updateHUD();
+  document.querySelectorAll(".health-fill").forEach(f=>{
+    const id=f.id.split("-")[1];
+    if(id===me.id) f.style.width=Math.max(0,me.health)+"%";
+    else if(others[id]) f.style.width=Math.max(0,others[id].health)+"%";
+  });
 
-  // Send state periodically
-  if(now-lastSent>50){
-    channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle,speed:me.speed,health:me.health});
-    lastSent=now;
-  }
+  // Send state
+  if(now-lastSent>50){channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle,speed:me.speed,health:me.health,dead:me.dead}); lastSent=now;}
 
   lastFrame=now;
   requestAnimationFrame(loop);

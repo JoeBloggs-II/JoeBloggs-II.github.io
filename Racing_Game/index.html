@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Turbo Trackers</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     html, body {
       margin: 0;
@@ -43,7 +43,7 @@
   </style>
 </head>
 <body>
-  <canvas id="game"></canvas>
+  <canvas id="game" width="1180" height="713"></canvas>
 
   <div id="controls">
     <button class="btn" id="left">⟵</button>
@@ -58,16 +58,18 @@
     const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
     const ROOM = "racing-room";
 
-    // Smoothing / networking
-    const INTERP_DELAY_MS = 120;    // render others slightly in the past
-    const MAX_HISTORY = 20;         // samples to keep per remote player
-    const MAX_EXTRAP_MS = 250;      // clamp extrapolation window
-    const SEND_INTERVAL_MS = 50;    // ~20Hz publish rate
+    const INTERP_DELAY_MS = 120;
+    const MAX_HISTORY = 20;
+    const MAX_EXTRAP_MS = 250;
+    const SEND_INTERVAL_MS = 50;
 
-    // Physics tuning (kept close to your original feel; frame-rate independent)
-    const ACCEL = 0.2;              // per 60fps frame
-    const TURN = 0.05;              // radians per 60fps frame
-    const FRICTION = 0.98;          // per 60fps frame
+    const ACCEL = 0.2;
+    const TURN = 0.05;
+    const FRICTION = 0.98;
+
+    const MAX_HEALTH = 100;
+    const COLLISION_RADIUS = 40;
+    const CRASH_PARTICLES = [];
 
     // --- Setup canvas ---
     const canvas = document.getElementById("game");
@@ -96,20 +98,22 @@
       y: Math.random() * canvas.height,
       angle: 0,
       speed: 0,
-      keys: {}
+      health: MAX_HEALTH,
+      keys: {},
+      dead: false
     };
 
-    const others = {}; // id -> { history: [{x,y,angle,time}], lastSeen }
+    const others = {}; // id -> { history: [], lastSeen, health, dead }
 
     // --- Input ---
     const keyDown = e => {
       const k = e.key;
-      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," ","Shift"].includes(k)) e.preventDefault();
       me.keys[k] = true;
     };
     const keyUp = e => {
       const k = e.key;
-      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," ","Shift"].includes(k)) e.preventDefault();
       me.keys[k] = false;
     };
     document.addEventListener("keydown", keyDown, { passive: false });
@@ -135,35 +139,118 @@
 
     // --- Helpers ---
     function angleLerp(a, b, t) {
-      // shortest-path angular interpolation
       let diff = ((b - a + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
       return a + diff * t;
     }
 
-    function drawCar(x, y, angle, image) {
+    function drawCar(x, y, angle, image, health) {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
       ctx.drawImage(image, -48, -23.8, 96, 47.6);
       ctx.restore();
+
+      const w = 60, h = 6;
+      const pct = Math.max(0, health) / MAX_HEALTH;
+      ctx.fillStyle = "red";
+      ctx.fillRect(x - w/2, y - 40, w, h);
+      ctx.fillStyle = "lime";
+      ctx.fillRect(x - w/2, y - 40, w * pct, h);
+      ctx.strokeStyle = "#000";
+      ctx.strokeRect(x - w/2, y - 40, w, h);
+    }
+
+    function addCrash(x, y) {
+      for (let i = 0; i < 20; i++) {
+        CRASH_PARTICLES.push({
+          x, y,
+          vx: (Math.random()-0.5)*6,
+          vy: (Math.random()-0.5)*6,
+          life: 30
+        });
+      }
+    }
+
+    function drawParticles() {
+      for (let i = CRASH_PARTICLES.length-1; i>=0; i--) {
+        const p = CRASH_PARTICLES[i];
+        ctx.fillStyle = `rgba(255,200,0,${p.life/30})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI*2);
+        ctx.fill();
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) CRASH_PARTICLES.splice(i,1);
+      }
+    }
+
+    function damagePlayers(p1, p2, relSpeed, angleDiff) {
+      const highSpeed = relSpeed > 10;
+      const headOn = Math.abs(angleDiff) < Math.PI/4 || Math.abs(angleDiff) > (3*Math.PI/4);
+
+      if (headOn) {
+        p1.health -= relSpeed*2;
+        p2.health -= relSpeed*2;
+        if (highSpeed) { p1.health = 0; p2.health = 0; }
+      } else if (Math.abs(angleDiff) < Math.PI/2) {
+        p2.health -= relSpeed*3;
+        p1.health -= relSpeed;
+      } else {
+        p1.health -= relSpeed*3;
+        p2.health -= relSpeed;
+      }
+    }
+
+    function respawn(player) {
+      player.x = Math.random() * canvas.width;
+      player.y = Math.random() * canvas.height;
+      player.angle = Math.random() * Math.PI * 2;
+      player.speed = 0;
+      player.health = MAX_HEALTH;
+      player.dead = false;
+    }
+
+    function checkCollisions() {
+      for (const id in others) {
+        const state = getInterpolatedState(others[id].history, performance.now());
+        if (!state) continue;
+        const dx = state.x - me.x;
+        const dy = state.y - me.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < COLLISION_RADIUS*2 && !me.dead && !others[id].dead) {
+          const relSpeed = Math.abs(me.speed) + 1;
+          const angleDiff = (me.angle - state.angle) % (Math.PI*2);
+          damagePlayers(me, others[id], relSpeed, angleDiff);
+          addCrash((me.x+state.x)/2, (me.y+state.y)/2);
+        }
+      }
+
+      if (me.health <= 0 && !me.dead) {
+        me.dead = true;
+        addCrash(me.x, me.y);
+        setTimeout(() => respawn(me), 1500);
+      }
     }
 
     function pushHistory(id, sample) {
       let o = others[id];
-      if (!o) o = others[id] = { history: [], lastSeen: sample.time };
+      if (!o) o = others[id] = { history: [], lastSeen: sample.time, health: MAX_HEALTH, dead: false };
       o.history.push(sample);
       o.lastSeen = sample.time;
+      if (sample.health !== undefined) o.health = sample.health;
       if (o.history.length > MAX_HISTORY) o.history.shift();
+      if (o.health <= 0 && !o.dead) {
+        o.dead = true;
+        addCrash(sample.x, sample.y);
+        setTimeout(() => respawn(o), 1500);
+      }
     }
 
     function getInterpolatedState(history, now) {
       if (!history || history.length === 0) return null;
       const renderTime = now - INTERP_DELAY_MS;
-
-      // If we're before the oldest, just use the oldest (no backward extrap)
       if (renderTime <= history[0].time) return history[0];
-
-      // Find the segment containing renderTime
       for (let i = history.length - 2; i >= 0; i--) {
         const older = history[i];
         const newer = history[i + 1];
@@ -172,33 +259,32 @@
           return {
             x: older.x + (newer.x - older.x) * t,
             y: older.y + (newer.y - older.y) * t,
-            angle: angleLerp(older.angle, newer.angle, t)
+            angle: angleLerp(older.angle, newer.angle, t),
+            health: newer.health
           };
         }
       }
-
-      // Otherwise, we're after the newest -> extrapolate from last two
       const last = history[history.length - 1];
       const prev = history[history.length - 2] || last;
       const dt = Math.max(1, last.time - prev.time);
       const vx = (last.x - prev.x) / dt;
       const vy = (last.y - prev.y) / dt;
       const va = (last.angle - prev.angle) / dt;
-
       const ahead = Math.min(MAX_EXTRAP_MS, renderTime - last.time);
       return {
         x: last.x + vx * ahead,
         y: last.y + vy * ahead,
-        angle: last.angle + va * ahead
+        angle: last.angle + va * ahead,
+        health: last.health
       };
     }
 
     // --- Networking receive ---
     channel.subscribe("player-state", (msg) => {
-      const { id, x, y, angle } = msg.data || {};
+      const { id, x, y, angle, health } = msg.data || {};
       if (!id || id === me.id) return;
       const t = performance.now();
-      pushHistory(id, { x, y, angle, time: t });
+      pushHistory(id, { x, y, angle, health: health ?? MAX_HEALTH, time: t });
     });
 
     // --- Game loop ---
@@ -206,40 +292,42 @@
     let lastSent = 0;
 
     function update(now) {
-      const dt = (now - lastFrame) / 1000;       // seconds
-      const frameScale = dt * 60;                // match original tuning
+      const dt = (now - lastFrame) / 1000;
+      const frameScale = dt * 60;
 
-      // Input -> physics
-      if (me.keys["ArrowUp"] || me.keys["w"] || me.keys.up) me.speed += ACCEL * frameScale;
-      if (me.keys["ArrowDown"] || me.keys["s"] || me.keys.down) me.speed -= ACCEL * frameScale;
-      if (me.keys["ArrowLeft"] || me.keys["a"] || me.keys.left) me.angle -= TURN * frameScale;
-      if (me.keys["ArrowRight"] || me.keys["d"] || me.keys.right) me.angle += TURN * frameScale;
+      if (!me.dead) {
+        const drifting = me.keys[" "] || me.keys["Shift"];
+        const turnRate = drifting ? TURN*1.8 : TURN;
+        const grip = drifting ? 0.95 : FRICTION;
 
-      // Friction
-      me.speed *= Math.pow(FRICTION, frameScale);
+        if (me.keys["ArrowUp"] || me.keys["w"] || me.keys.up) me.speed += ACCEL * frameScale;
+        if (me.keys["ArrowDown"] || me.keys["s"] || me.keys.down) me.speed -= ACCEL * frameScale;
+        if (me.keys["ArrowLeft"] || me.keys["a"] || me.keys.left) me.angle -= turnRate * frameScale;
+        if (me.keys["ArrowRight"] || me.keys["d"] || me.keys.right) me.angle += turnRate * frameScale;
 
-      // Integrate
-      me.x += Math.cos(me.angle) * me.speed * frameScale;
-      me.y += Math.sin(me.angle) * me.speed * frameScale;
+        me.speed *= Math.pow(grip, frameScale);
+        me.x += Math.cos(me.angle) * me.speed * frameScale;
+        me.y += Math.sin(me.angle) * me.speed * frameScale;
 
-      // Keep on-screen (simple wrap; optional)
-      if (me.x < -60) me.x = canvas.width + 60;
-      if (me.y < -60) me.y = canvas.height + 60;
-      if (me.x > canvas.width + 60) me.x = -60;
-      if (me.y > canvas.height + 60) me.y = -60;
+        if (me.x < -60) me.x = canvas.width + 60;
+        if (me.y < -60) me.y = canvas.height + 60;
+        if (me.x > canvas.width + 60) me.x = -60;
+        if (me.y > canvas.height + 60) me.y = -60;
 
-      // Throttled publish
+        checkCollisions();
+      }
+
       if (now - lastSent >= SEND_INTERVAL_MS) {
         channel.publish("player-state", {
           id: me.id,
           x: me.x,
           y: me.y,
-          angle: me.angle
+          angle: me.angle,
+          health: me.health
         });
         lastSent = now;
       }
 
-      // Cull stale players
       for (const id in others) {
         if (now - others[id].lastSeen > 3000) delete others[id];
       }
@@ -248,14 +336,18 @@
     function draw(now) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Draw me
-      drawCar(me.x, me.y, me.angle, carImage);
+      if (!me.dead) {
+        drawCar(me.x, me.y, me.angle, carImage, me.health);
+      }
 
-      // Draw others (smoothed)
       for (const id in others) {
         const state = getInterpolatedState(others[id].history, now);
-        if (state) drawCar(state.x, state.y, state.angle, carOtherImage);
+        if (state && !others[id].dead) {
+          drawCar(state.x, state.y, state.angle, carOtherImage, state.health ?? MAX_HEALTH);
+        }
       }
+
+      drawParticles();
     }
 
     function loop(now) {

@@ -1,362 +1,127 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Turbo Trackers</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2 Player Car Battle</title>
   <style>
-    html, body {
-      margin: 0;
-      background: #111;
-      overflow: hidden;
-      height: 100%;
-    }
-    canvas {
-      display: block;
-      background: #222;
-      width: 100vw;
-      height: 100vh;
-    }
-    #controls {
-      position: fixed;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 10px;
-      z-index: 10;
-      user-select: none;
-    }
-    .btn {
-      width: 60px;
-      height: 60px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.1);
-      border: 2px solid #fff;
-      color: white;
-      font-size: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      touch-action: manipulation;
+    body { margin:0; overflow:hidden; background:#333; }
+    canvas { display:block; margin:0 auto; background:#222; }
+    #hud {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 40px; color: white; font-family: sans-serif;
+      font-size: 18px; font-weight: bold;
     }
   </style>
 </head>
 <body>
-  <canvas id="game" width="1180" height="713"></canvas>
-
-  <div id="controls">
-    <button class="btn" id="left">⟵</button>
-    <button class="btn" id="up">↑</button>
-    <button class="btn" id="down">↓</button>
-    <button class="btn" id="right">⟶</button>
+  <div id="hud">
+    <div id="p1Health">P1 Health: 100</div>
+    <div id="p2Health">P2 Health: 100</div>
   </div>
-
-  <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
   <script>
-    // --- Config ---
-    const API_KEY = "Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
-    const ROOM = "racing-room";
-
-    const INTERP_DELAY_MS = 120;
-    const MAX_HISTORY = 20;
-    const MAX_EXTRAP_MS = 250;
-    const SEND_INTERVAL_MS = 50;
-
-    const ACCEL = 0.2;
-    const TURN = 0.05;
-    const FRICTION = 0.98;
-
-    const MAX_HEALTH = 100;
-    const COLLISION_RADIUS = 40;
-    const CRASH_PARTICLES = [];
-
-    // --- Setup canvas ---
-    const canvas = document.getElementById("game");
+    const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-    window.addEventListener("resize", resize);
-    resize();
 
-    // --- Assets ---
-    const carImage = new Image();
-    carImage.src = "assets/red_car.svg";
-    const carOtherImage = new Image();
-    carOtherImage.src = "assets/blue_car.svg";
+    class Car {
+      constructor(x, y, color, controls) {
+        this.x = x; this.y = y;
+        this.angle = 0;
+        this.speed = 0;
+        this.maxSpeed = 5;
+        this.color = color;
+        this.health = 100;
+        this.controls = controls;
+        this.width = 40; this.height = 20;
+      }
 
-    // --- Ably ---
-    const ably = new Ably.Realtime(API_KEY);
-    const channel = ably.channels.get(ROOM);
+      update(keys) {
+        if (keys[this.controls.up]) this.speed = Math.min(this.speed + 0.2, this.maxSpeed);
+        else this.speed *= 0.95; // friction
+        if (keys[this.controls.down]) this.speed = Math.max(this.speed - 0.2, -this.maxSpeed/2);
+        if (keys[this.controls.left]) this.angle -= 0.05 * this.speed;
+        if (keys[this.controls.right]) this.angle += 0.05 * this.speed;
 
-    // --- Player state ---
-    const me = {
-      id: Math.random().toString(36).substr(2, 5),
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      angle: 0,
-      speed: 0,
-      health: MAX_HEALTH,
-      keys: {},
-      dead: false
-    };
+        this.x += Math.cos(this.angle) * this.speed;
+        this.y += Math.sin(this.angle) * this.speed;
 
-    const others = {}; // id -> { history: [], lastSeen, health, dead }
+        // Keep inside canvas
+        this.x = Math.max(0, Math.min(canvas.width, this.x));
+        this.y = Math.max(0, Math.min(canvas.height, this.y));
+      }
 
-    // --- Input ---
-    const keyDown = e => {
-      const k = e.key;
-      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," ","Shift"].includes(k)) e.preventDefault();
-      me.keys[k] = true;
-    };
-    const keyUp = e => {
-      const k = e.key;
-      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," ","Shift"].includes(k)) e.preventDefault();
-      me.keys[k] = false;
-    };
-    document.addEventListener("keydown", keyDown, { passive: false });
-    document.addEventListener("keyup", keyUp, { passive: false });
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        ctx.fillStyle = this.color;
+        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+        ctx.restore();
+      }
 
-    // Mobile controls
-    const controls = {
-      left: document.getElementById("left"),
-      right: document.getElementById("right"),
-      up: document.getElementById("up"),
-      down: document.getElementById("down")
-    };
-    Object.entries(controls).forEach(([dir, btn]) => {
-      const onStart = (e) => { e.preventDefault(); me.keys[dir] = true; };
-      const onEnd   = (e) => { e.preventDefault(); me.keys[dir] = false; };
-      btn.addEventListener("touchstart", onStart, { passive: false });
-      btn.addEventListener("touchend", onEnd, { passive: false });
-      btn.addEventListener("touchcancel", onEnd, { passive: false });
-      btn.addEventListener("pointerdown", onStart);
-      btn.addEventListener("pointerup", onEnd);
-      btn.addEventListener("pointerleave", onEnd);
-    });
-
-    // --- Helpers ---
-    function angleLerp(a, b, t) {
-      let diff = ((b - a + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
-      return a + diff * t;
-    }
-
-    function drawCar(x, y, angle, image, health) {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.drawImage(image, -48, -23.8, 96, 47.6);
-      ctx.restore();
-
-      const w = 60, h = 6;
-      const pct = Math.max(0, health) / MAX_HEALTH;
-      ctx.fillStyle = "red";
-      ctx.fillRect(x - w/2, y - 40, w, h);
-      ctx.fillStyle = "lime";
-      ctx.fillRect(x - w/2, y - 40, w * pct, h);
-      ctx.strokeStyle = "#000";
-      ctx.strokeRect(x - w/2, y - 40, w, h);
-    }
-
-    function addCrash(x, y) {
-      for (let i = 0; i < 20; i++) {
-        CRASH_PARTICLES.push({
-          x, y,
-          vx: (Math.random()-0.5)*6,
-          vy: (Math.random()-0.5)*6,
-          life: 30
-        });
+      getCorners() {
+        const cos = Math.cos(this.angle), sin = Math.sin(this.angle);
+        return [
+          {x: this.x + cos*this.width/2 - sin*this.height/2, y: this.y + sin*this.width/2 + cos*this.height/2}, // front right
+          {x: this.x + cos*this.width/2 + sin*this.height/2, y: this.y + sin*this.width/2 - cos*this.height/2}, // front left
+          {x: this.x - cos*this.width/2 - sin*this.height/2, y: this.y - sin*this.width/2 + cos*this.height/2}, // back right
+          {x: this.x - cos*this.width/2 + sin*this.height/2, y: this.y - sin*this.width/2 - cos*this.height/2}, // back left
+        ];
       }
     }
 
-    function drawParticles() {
-      for (let i = CRASH_PARTICLES.length-1; i>=0; i--) {
-        const p = CRASH_PARTICLES[i];
-        ctx.fillStyle = `rgba(255,200,0,${p.life/30})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI*2);
-        ctx.fill();
-        p.x += p.vx;
-        p.y += p.vy;
-        p.life--;
-        if (p.life <= 0) CRASH_PARTICLES.splice(i,1);
-      }
-    }
+    const keys = {};
+    document.addEventListener("keydown", e => keys[e.key] = true);
+    document.addEventListener("keyup", e => keys[e.key] = false);
 
-    function damagePlayers(p1, p2, relSpeed, angleDiff) {
-      const highSpeed = relSpeed > 10;
-      const headOn = Math.abs(angleDiff) < Math.PI/4 || Math.abs(angleDiff) > (3*Math.PI/4);
+    const car1 = new Car(200, 300, "red", {up:"w", down:"s", left:"a", right:"d"});
+    const car2 = new Car(600, 300, "blue", {up:"ArrowUp", down:"ArrowDown", left:"ArrowLeft", right:"ArrowRight"});
 
-      if (headOn) {
-        p1.health -= relSpeed*2;
-        p2.health -= relSpeed*2;
-        if (highSpeed) { p1.health = 0; p2.health = 0; }
-      } else if (Math.abs(angleDiff) < Math.PI/2) {
-        p2.health -= relSpeed*3;
-        p1.health -= relSpeed;
-      } else {
-        p1.health -= relSpeed*3;
-        p2.health -= relSpeed;
-      }
-    }
+    function checkCollision(c1, c2) {
+      const dx = c1.x - c2.x;
+      const dy = c1.y - c2.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < 40) { // simple overlap radius check
+        const relativeSpeed = Math.abs(c1.speed - c2.speed);
 
-    function respawn(player) {
-      player.x = Math.random() * canvas.width;
-      player.y = Math.random() * canvas.height;
-      player.angle = Math.random() * Math.PI * 2;
-      player.speed = 0;
-      player.health = MAX_HEALTH;
-      player.dead = false;
-    }
-
-    function checkCollisions() {
-      for (const id in others) {
-        const state = getInterpolatedState(others[id].history, performance.now());
-        if (!state) continue;
-        const dx = state.x - me.x;
-        const dy = state.y - me.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < COLLISION_RADIUS*2 && !me.dead && !others[id].dead) {
-          const relSpeed = Math.abs(me.speed) + 1;
-          const angleDiff = (me.angle - state.angle) % (Math.PI*2);
-          damagePlayers(me, others[id], relSpeed, angleDiff);
-          addCrash((me.x+state.x)/2, (me.y+state.y)/2);
+        // Head-on check → both take damage
+        const dot = Math.cos(c1.angle - c2.angle);
+        if (dot < -0.5) {
+          const dmg = Math.floor(relativeSpeed * 5);
+          c1.health -= dmg;
+          c2.health -= dmg;
+        } else {
+          // Otherwise, faster car deals damage
+          if (Math.abs(c1.speed) > Math.abs(c2.speed)) {
+            c2.health -= Math.floor(Math.abs(c1.speed) * 5);
+          } else if (Math.abs(c2.speed) > Math.abs(c1.speed)) {
+            c1.health -= Math.floor(Math.abs(c2.speed) * 5);
+          }
         }
-      }
 
-      if (me.health <= 0 && !me.dead) {
-        me.dead = true;
-        addCrash(me.x, me.y);
-        setTimeout(() => respawn(me), 1500);
+        // Bounce back
+        c1.speed *= -0.5;
+        c2.speed *= -0.5;
       }
     }
 
-    function pushHistory(id, sample) {
-      let o = others[id];
-      if (!o) o = others[id] = { history: [], lastSeen: sample.time, health: MAX_HEALTH, dead: false };
-      o.history.push(sample);
-      o.lastSeen = sample.time;
-      if (sample.health !== undefined) o.health = sample.health;
-      if (o.history.length > MAX_HISTORY) o.history.shift();
-      if (o.health <= 0 && !o.dead) {
-        o.dead = true;
-        addCrash(sample.x, sample.y);
-        setTimeout(() => respawn(o), 1500);
-      }
+    function gameLoop() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      car1.update(keys);
+      car2.update(keys);
+
+      checkCollision(car1, car2);
+
+      car1.draw();
+      car2.draw();
+
+      document.getElementById("p1Health").textContent = "P1 Health: " + car1.health;
+      document.getElementById("p2Health").textContent = "P2 Health: " + car2.health;
+
+      requestAnimationFrame(gameLoop);
     }
 
-    function getInterpolatedState(history, now) {
-      if (!history || history.length === 0) return null;
-      const renderTime = now - INTERP_DELAY_MS;
-      if (renderTime <= history[0].time) return history[0];
-      for (let i = history.length - 2; i >= 0; i--) {
-        const older = history[i];
-        const newer = history[i + 1];
-        if (older.time <= renderTime && renderTime <= newer.time) {
-          const t = (renderTime - older.time) / Math.max(1, (newer.time - older.time));
-          return {
-            x: older.x + (newer.x - older.x) * t,
-            y: older.y + (newer.y - older.y) * t,
-            angle: angleLerp(older.angle, newer.angle, t),
-            health: newer.health
-          };
-        }
-      }
-      const last = history[history.length - 1];
-      const prev = history[history.length - 2] || last;
-      const dt = Math.max(1, last.time - prev.time);
-      const vx = (last.x - prev.x) / dt;
-      const vy = (last.y - prev.y) / dt;
-      const va = (last.angle - prev.angle) / dt;
-      const ahead = Math.min(MAX_EXTRAP_MS, renderTime - last.time);
-      return {
-        x: last.x + vx * ahead,
-        y: last.y + vy * ahead,
-        angle: last.angle + va * ahead,
-        health: last.health
-      };
-    }
-
-    // --- Networking receive ---
-    channel.subscribe("player-state", (msg) => {
-      const { id, x, y, angle, health } = msg.data || {};
-      if (!id || id === me.id) return;
-      const t = performance.now();
-      pushHistory(id, { x, y, angle, health: health ?? MAX_HEALTH, time: t });
-    });
-
-    // --- Game loop ---
-    let lastFrame = performance.now();
-    let lastSent = 0;
-
-    function update(now) {
-      const dt = (now - lastFrame) / 1000;
-      const frameScale = dt * 60;
-
-      if (!me.dead) {
-        const drifting = me.keys[" "] || me.keys["Shift"];
-        const turnRate = drifting ? TURN*1.8 : TURN;
-        const grip = drifting ? 0.95 : FRICTION;
-
-        if (me.keys["ArrowUp"] || me.keys["w"] || me.keys.up) me.speed += ACCEL * frameScale;
-        if (me.keys["ArrowDown"] || me.keys["s"] || me.keys.down) me.speed -= ACCEL * frameScale;
-        if (me.keys["ArrowLeft"] || me.keys["a"] || me.keys.left) me.angle -= turnRate * frameScale;
-        if (me.keys["ArrowRight"] || me.keys["d"] || me.keys.right) me.angle += turnRate * frameScale;
-
-        me.speed *= Math.pow(grip, frameScale);
-        me.x += Math.cos(me.angle) * me.speed * frameScale;
-        me.y += Math.sin(me.angle) * me.speed * frameScale;
-
-        if (me.x < -60) me.x = canvas.width + 60;
-        if (me.y < -60) me.y = canvas.height + 60;
-        if (me.x > canvas.width + 60) me.x = -60;
-        if (me.y > canvas.height + 60) me.y = -60;
-
-        checkCollisions();
-      }
-
-      if (now - lastSent >= SEND_INTERVAL_MS) {
-        channel.publish("player-state", {
-          id: me.id,
-          x: me.x,
-          y: me.y,
-          angle: me.angle,
-          health: me.health
-        });
-        lastSent = now;
-      }
-
-      for (const id in others) {
-        if (now - others[id].lastSeen > 3000) delete others[id];
-      }
-    }
-
-    function draw(now) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (!me.dead) {
-        drawCar(me.x, me.y, me.angle, carImage, me.health);
-      }
-
-      for (const id in others) {
-        const state = getInterpolatedState(others[id].history, now);
-        if (state && !others[id].dead) {
-          drawCar(state.x, state.y, state.angle, carOtherImage, state.health ?? MAX_HEALTH);
-        }
-      }
-
-      drawParticles();
-    }
-
-    function loop(now) {
-      update(now);
-      draw(now);
-      lastFrame = now;
-      requestAnimationFrame(loop);
-    }
-    requestAnimationFrame(loop);
+    gameLoop();
   </script>
 </body>
 </html>

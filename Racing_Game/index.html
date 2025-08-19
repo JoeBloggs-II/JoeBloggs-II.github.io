@@ -11,10 +11,16 @@ canvas { display:block; background:#222; width:100vw; height:100vh; }
        display:flex; gap:20px; color:white; font-family:sans-serif; font-size:16px; font-weight:bold; z-index:10; }
 .health-bar { width:120px; height:12px; background:#444; border:1px solid white; position:relative; }
 .health-fill { height:100%; background:lime; width:100%; }
+#deadScreen {
+  position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7);
+  display:flex; flex-direction:column; justify-content:center; align-items:center; color:white; font-family:sans-serif;
+  font-size:28px; font-weight:bold; z-index:20; display:none;
+}
 </style>
 </head>
 <body>
 <div id="hud"></div>
+<div id="deadScreen"><div id="killerText"></div><div id="respawnText"></div></div>
 <canvas id="game"></canvas>
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 <script>
@@ -33,8 +39,9 @@ const ably=new Ably.Realtime(API_KEY);
 const channel=ably.channels.get(ROOM);
 
 // --- Player state ---
-const me={id:Math.random().toString(36).substr(2,5), x:Math.random()*canvas.width, y:Math.random()*canvas.height, angle:0, speed:0, health:100, keys:{}, stunned:0, dead:false, respawnTimer:0};
-const others={}; // id -> { history:[], health, lastSeen, dead, respawnTimer }
+const me={id:Math.random().toString(36).substr(2,5), x:Math.random()*canvas.width, y:Math.random()*canvas.height,
+  angle:0, speed:0, health:100, keys:{}, stunned:0, dead:false, respawnTimer:0, killer:null};
+const others={}; // id -> { history:[], health, lastSeen, dead, respawnTimer, killer }
 
 // --- Dynamic HUD ---
 const hud=document.getElementById("hud");
@@ -58,22 +65,23 @@ const particles=[];
 class Particle{
   constructor(x,y,color,size,life,velX,velY){this.x=x;this.y=y;this.color=color;this.size=size;this.life=life;this.velX=velX||0;this.velY=velY||0;}
   update(){this.life--; this.x+=this.velX; this.y+=this.velY;}
-  draw(){ctx.fillStyle=this.color; ctx.globalAlpha=this.life/30; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;}
+  draw(){ctx.fillStyle=this.color; ctx.globalAlpha=Math.max(0,this.life/30); ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;}
 }
 
 // --- Helpers ---
 function drawCar(x,y,angle,image){ctx.save(); ctx.translate(x,y); ctx.rotate(angle); ctx.drawImage(image,-48,-23.8,96,47.6); ctx.restore();}
-function pushHistory(id,sample){let o=others[id]; if(!o)o=others[id]={history:[],health:100,lastSeen:sample.time,dead:false,respawnTimer:0}; o.history.push(sample); o.lastSeen=sample.time; if(o.history.length>20)o.history.shift();}
+function pushHistory(id,sample){let o=others[id]; if(!o)o=others[id]={history:[],health:100,lastSeen:sample.time,dead:false,respawnTimer:0,killer:null}; o.history.push(sample); o.lastSeen=sample.time; if(o.history.length>20)o.history.shift();}
 function getInterpolatedState(history,now){if(!history||history.length===0)return null; const renderTime=now-120; for(let i=history.length-2;i>=0;i--){const older=history[i],newer=history[i+1]; if(older.time<=renderTime && renderTime<=newer.time){const t=(renderTime-older.time)/(newer.time-older.time||1); return {x:older.x+(newer.x-older.x)*t, y:older.y+(newer.y-older.y)*t, angle:older.angle+(newer.angle-older.angle)*t, speed:older.speed+(newer.speed-older.speed)*t};}} const last=history[history.length-1]; return last;}
 
 // --- Networking receive ---
 channel.subscribe("player-state",(msg)=>{
-  const {id,x,y,angle,speed,health,dead,respawnTimer}=msg.data||{};
+  const {id,x,y,angle,speed,health,dead,respawnTimer,killer}=msg.data||{};
   if(!id||id===me.id) return;
   pushHistory(id,{x,y,angle,speed,time:performance.now()});
   others[id].health=health;
   others[id].dead=dead;
   others[id].respawnTimer=respawnTimer||0;
+  others[id].killer=killer||null;
   updateHUD();
 });
 
@@ -86,8 +94,9 @@ function collideCars(c1,c2){
     const diff=Math.abs((c1.angle-dir+Math.PI)%(2*Math.PI)-Math.PI);
     const headOn=diff>Math.PI/3;
     const impactSpeed=Math.abs(c1.speed-c2.speed);
-    if(headOn){ const dmg=Math.floor(impactSpeed*15); c1.health-=dmg; c2.health-=dmg;}
-    else{ if(c1.speed>c2.speed) c2.health-=Math.floor(c1.speed*10); else if(c2.speed>c1.speed) c1.health-=Math.floor(c2.speed*10);}
+    let dmg=0;
+    if(headOn){ dmg=Math.floor(impactSpeed*20); c1.health-=dmg; c2.health-=dmg; c1.killer=c2.id; c2.killer=c1.id;}
+    else{ if(c1.speed>c2.speed){dmg=Math.floor(c1.speed*12); c2.health-=dmg; c2.killer=c1.id;} else if(c2.speed>c1.speed){dmg=Math.floor(c2.speed*12); c1.health-=dmg; c1.killer=c2.id;}}
     const knock=10; c1.x-=Math.cos(dir)*knock; c1.y-=Math.sin(dir)*knock; c2.x+=Math.cos(dir)*knock; c2.y+=Math.sin(dir)*knock; c1.stunned=15; c2.stunned=15;
     for(let i=0;i<15;i++)particles.push(new Particle(c1.x,c1.y,"orange",3,30,(Math.random()-0.5)*5,(Math.random()-0.5)*5));
   }
@@ -95,28 +104,39 @@ function collideCars(c1,c2){
 
 // --- Respawn ---
 function respawnPlayer(p){
-  p.x=Math.random()*canvas.width; p.y=Math.random()*canvas.height; p.angle=0; p.speed=0; p.health=100; p.dead=false; p.stunned=0;
+  p.x=Math.random()*canvas.width; p.y=Math.random()*canvas.height; p.angle=0; p.speed=0; p.health=100; p.dead=false; p.stunned=0; p.killer=null;
   for(let i=0;i<15;i++)particles.push(new Particle(p.x,p.y,"lime",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));
 }
+
+// --- Dead screen elements ---
+const deadScreen=document.getElementById("deadScreen");
+const killerText=document.getElementById("killerText");
+const respawnText=document.getElementById("respawnText");
 
 // --- Game loop ---
 let lastFrame=performance.now(), lastSent=0;
 updateHUD();
 function loop(now){
-  const dt=(now-lastFrame)/1000;
-  const frameScale=dt*60;
+  const dt=(now-lastFrame)/1000; const frameScale=dt*60;
 
   // Local player
   if(me.dead){
-    me.respawnTimer-=dt;
-    if(me.respawnTimer<=0) respawnPlayer(me);
-  }else{
-    if(me.stunned>0){me.stunned--; me.speed*=0.95;} else {
-      if(me.keys.up){ me.speed+=0.25*frameScale; particles.push(new Particle(me.x,me.y,"white",2,15,(Math.random()-0.5)*1,(Math.random()-0.5)*1)); }
+    deadScreen.style.display="flex";
+    respawnText.textContent=`Respawning in ${Math.ceil(me.respawnTimer)}...`;
+  }else deadScreen.style.display="none";
+
+  if(me.dead){ me.respawnTimer-=dt; if(me.respawnTimer<=0) respawnPlayer(me);}
+  else{
+    if(me.stunned>0){me.stunned--; me.speed*=0.95;}
+    else{
+      // Arcade turning physics
+      if(me.keys.up){ me.speed+=0.25*frameScale; particles.push(new Particle(me.x,me.y,"white",2,15,(Math.random()-0.5)*1,(Math.random()-0.5)*1));}
       if(me.keys.down) me.speed-=0.15*frameScale;
-      if(me.keys.left) me.angle-=0.04*frameScale*(me.speed/3);
-      if(me.keys.right) me.angle+=0.04*frameScale*(me.speed/3);
-      if(me.keys.drift){for(let i=0;i<2;i++)particles.push(new Particle(me.x,me.y,"yellow",2,15,(Math.random()-0.5)*2,(Math.random()-0.5)*2));}
+      const turnFactor=0.03*Math.max(me.speed,1);
+      if(me.keys.left) me.angle-=turnFactor*frameScale;
+      if(me.keys.right) me.angle+=turnFactor*frameScale;
+      // Drifting
+      if(me.keys.drift && me.speed>1){for(let i=0;i<2;i++)particles.push(new Particle(me.x,me.y,"yellow",2,15,(Math.random()-0.5)*2,(Math.random()-0.5)*2));}
     }
     me.speed*=0.96; me.speed=Math.max(Math.min(me.speed,6),-3);
     me.x+=Math.cos(me.angle)*me.speed*frameScale;
@@ -124,7 +144,8 @@ function loop(now){
   }
 
   // Wrap screen
-  if(me.x<-60) me.x=canvas.width+60; if(me.x>canvas.width+60) me.x=-60; if(me.y<-60) me.y=canvas.height+60; if(me.y>canvas.height+60) me.y=-60;
+  if(me.x<-60) me.x=canvas.width+60; if(me.x>canvas.width+60) me.x=-60;
+  if(me.y<-60) me.y=canvas.height+60; if(me.y>canvas.height+60) me.y=-60;
 
   // Update others
   for(const id in others){
@@ -132,7 +153,6 @@ function loop(now){
     const s=getInterpolatedState(o.history,now);
     if(s){o.x=s.x;o.y=s.y;o.angle=s.angle;o.speed=s.speed;}
     if(now-o.lastSeen>3000) delete others[id];
-
     if(o.dead){o.respawnTimer-=dt; if(o.respawnTimer<=0) respawnPlayer(o);}
   }
 
@@ -140,8 +160,11 @@ function loop(now){
   for(const id in others) collideCars(me, others[id]);
 
   // Check death
-  if(me.health<=0 && !me.dead){me.dead=true; me.speed=0; me.respawnTimer=5; for(let i=0;i<25;i++)particles.push(new Particle(me.x,me.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
-  for(const id in others){const o=others[id]; if(o.health<=0 && !o.dead){o.dead=true; o.speed=0; o.respawnTimer=5; for(let i=0;i<25;i++)particles.push(new Particle(o.x,o.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}}
+  if(me.health<=0 && !me.dead){me.dead=true; me.speed=0; me.respawnTimer=5; killerText.textContent=`You were killed by Player ${me.killer||"?"}`; for(let i=0;i<25;i++)particles.push(new Particle(me.x,me.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
+  for(const id in others){
+    const o=others[id];
+    if(o.health<=0 && !o.dead){o.dead=true; o.speed=0; o.respawnTimer=5; for(let i=0;i<25;i++)particles.push(new Particle(o.x,o.y,"red",4,40,(Math.random()-0.5)*5,(Math.random()-0.5)*5));}
+  }
 
   // Draw
   ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -160,7 +183,7 @@ function loop(now){
   });
 
   // Send state
-  if(now-lastSent>50){channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle,speed:me.speed,health:me.health,dead:me.dead,respawnTimer:me.respawnTimer}); lastSent=now;}
+  if(now-lastSent>50){channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle,speed:me.speed,health:me.health,dead:me.dead,respawnTimer:me.respawnTimer,killer:me.killer}); lastSent=now;}
 
   lastFrame=now;
   requestAnimationFrame(loop);

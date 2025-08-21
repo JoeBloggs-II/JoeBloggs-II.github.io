@@ -6,6 +6,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html, body { margin:0; overflow:hidden; background:#111; height:100%; }
+  /* prevent accidental scrollbars caused by focus outlines etc. */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   canvas { display:block; background:#202225; width:100vw; height:100vh; }
   #hud {
     position:absolute; top:10px; left:50%; transform:translateX(-50%);
@@ -24,6 +26,16 @@
   }
   #deadScreen .title { font-size:28px; font-weight:800; letter-spacing:0.5px; }
   #deadScreen .sub { font-size:18px; opacity:0.9; }
+
+  /* small OOB timer display */
+  #oobWarn {
+    position: absolute; left: 50%; transform: translateX(-50%); top: 70px;
+    z-index: 21; color: #ffcc00; font-family: system-ui; font-weight:700;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  }
+
+  /* chat button focus outline improvement */
+  #chatBtn:focus { outline: none; box-shadow:0 0 0 3px rgba(255,255,255,0.06) }
 </style>
 </head>
 <body>
@@ -34,6 +46,7 @@
   <div class="title" id="killerText"></div>
   <div class="sub" id="respawnText"></div>
 </div>
+<div id="oobWarn" style="display:none;"></div>
 
 <!-- Game canvas -->
 <canvas id="game"></canvas>
@@ -42,38 +55,54 @@
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 
 <script>
+/* ============================================================
+   UX: username prompt saved to cookie (so we only ask once)
+   ============================================================ */
+function cookieGet(name){
+  const m = document.cookie.match(new RegExp('(^| )'+name+'=([^;]+)'));
+  return m ? decodeURIComponent(m[2]) : null;
+}
+function cookieSet(name, value, days=365){
+  const exp = new Date(); exp.setTime(exp.getTime() + days*24*60*60*1000);
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; expires=${exp.toUTCString()}`;
+}
+let savedName = cookieGet('tt_name');
+if(!savedName){
+  // prompt while being polite
+  const n = prompt("Pick a username for Turbo Trackers (saved locally):", "Player"+Math.floor(Math.random()*900+100));
+  savedName = (n && n.trim()) ? n.trim() : "Player"+Math.floor(Math.random()*900+100);
+  cookieSet('tt_name', savedName, 3650);
+}
+
 /* =========================
    CHAT UI (button + sidebar)
    ========================= */
-const chatBtn = document.createElement("div");
+const chatBtn = document.createElement("button");
 chatBtn.id = "chatBtn";
+chatBtn.title = "Open chat";
+chatBtn.innerHTML = '&#9776;'; // simple hamburger glyph
 chatBtn.style = `
   position:absolute; top:12px; right:12px;
-  width:32px; height:28px; cursor:pointer; z-index:15;
-  display:flex; flex-direction:column; justify-content:space-around;
+  width:36px; height:34px; cursor:pointer; z-index:15;
+  display:flex; align-items:center; justify-content:center;
   padding:4px; background:rgba(0,0,0,0.55); border-radius:6px;
+  color:white; font-size:18px; border:0;
   box-shadow:0 2px 6px rgba(0,0,0,0.4);
 `;
-for (let i = 0; i < 3; i++) {
-  const line = document.createElement("div");
-  line.style = "height:3px; background:#fff; border-radius:2px;";
-  chatBtn.appendChild(line);
-}
 document.body.appendChild(chatBtn);
 
 const chatSidebar = document.createElement("div");
 chatSidebar.id = "chatSidebar";
 chatSidebar.style = `
-  position:absolute; top:0; right:-300px; width:300px; height:100%;
+  position:absolute; top:0; right:-320px; width:320px; height:100%;
   background:#1d1f22; color:#fff; font-family:system-ui;
-  box-shadow:-6px 0 12px rgba(0,0,0,0.35);
-  display:flex; flex-direction:column; padding:10px 10px 12px 10px;
-  transition:right 0.25s; z-index:14;
+  box-shadow:-8px 0 18px rgba(0,0,0,0.45);
+  display:flex; flex-direction:column; padding:12px; transition:right 0.22s; z-index:14;
 `;
 document.body.appendChild(chatSidebar);
 
 const chatLog = document.createElement("div");
-chatLog.style = "flex:1 1 auto; overflow-y:auto; font-size:14px; line-height:1.35;";
+chatLog.style = "flex:1 1 auto; overflow-y:auto; font-size:13px; line-height:1.35; padding-right:6px;";
 chatSidebar.appendChild(chatLog);
 
 const chatInput = document.createElement("input");
@@ -84,13 +113,13 @@ chatSidebar.appendChild(chatInput);
 let chatOpen = false;
 chatBtn.addEventListener("click", () => {
   chatOpen = !chatOpen;
-  chatSidebar.style.right = chatOpen ? "0px" : "-300px";
-  if (chatOpen) setTimeout(() => chatInput.focus(), 0);
+  chatSidebar.style.right = chatOpen ? "0px" : "-320px";
+  if (chatOpen) setTimeout(()=> chatInput.focus(), 50);
 });
 
-/* ================
+/* ===========
    CANVAS & ASSETS
-   ================ */
+   =========== */
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
@@ -114,27 +143,24 @@ const channel = ably.channels.get(ROOM);
 const messages = [];
 function renderChat() {
   chatLog.innerHTML = "";
-  messages.slice(-120).forEach(m => {
+  messages.slice(-200).forEach(m => {
     const row = document.createElement("div");
     row.textContent = m;
-    row.style.margin = "2px 0";
+    row.style.margin = "4px 0";
     chatLog.appendChild(row);
   });
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 channel.subscribe("chat", (msg) => {
   const d = msg.data;
-  if (typeof d === "string") {
-    messages.push(d);
-  } else if (d && d.id && d.text) {
-    messages.push(`${d.id.slice(0,6)}: ${d.text}`);
-  }
+  if (typeof d === "string") messages.push(d);
+  else if (d && d.id && d.text) messages.push(`${d.name || d.id.slice(0,6)}: ${d.text}`);
   renderChat();
 });
 chatInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && chatInput.value.trim()) {
-    const payload = { id: me.id, text: chatInput.value.trim() };
-    channel.publish("chat", payload);
+  if (e.key === "Enter" && chatInput.value.trim()){
+    const text = chatInput.value.trim();
+    channel.publish("chat", { id: me.id, name: me.name, text });
     chatInput.value = "";
   }
 });
@@ -145,42 +171,22 @@ chatInput.addEventListener("keydown", (e) => {
 const WORLD_W = 5000;
 const WORLD_H = 5000;
 
-// Decorative/static obstacles (simple rectangles)
-const obstacles = [
-  {x: 450,  y: 700,  w: 240, h: 50},
-  {x: 1400, y: 1200, w: 120, h: 160},
-  {x: 2300, y: 900,  w: 200, h: 60},
-  {x: 3300, y: 2200, w: 140, h: 140},
-  {x: 4100, y: 1100, w: 180, h: 80}
-];
-
 /* ==========
    PARTICLES
    ========== */
 const particles = [];
 class Particle {
-  constructor(x,y,size,life,vx,vy,color) {
+  constructor(x,y,size,life,vx,vy,color){
     this.x=x; this.y=y; this.size=size; this.life=life; this.vx=vx||0; this.vy=vy||0; this.color=color||"white"; this.maxLife=life;
   }
   update(){ this.life--; this.x+=this.vx; this.y+=this.vy; }
-  draw(){
-    ctx.globalAlpha = Math.max(0, this.life / this.maxLife);
-    ctx.fillStyle = this.color;
-    ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI*2); ctx.fill();
-    ctx.globalAlpha = 1;
-  }
+  draw(){ ctx.globalAlpha=Math.max(0,this.life/this.maxLife); ctx.fillStyle=this.color; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; }
 }
-function burst(x,y,count,baseSpeed,color,size=3,life=30) {
-  for (let i=0;i<count;i++) {
-    const a = Math.random()*Math.PI*2;
-    const s = baseSpeed*(0.4+0.6*Math.random());
-    particles.push(new Particle(
-      x,y,
-      size*(0.8+Math.random()*0.6),
-      life+Math.floor(Math.random()*10),
-      Math.cos(a)*s, Math.sin(a)*s,
-      color
-    ));
+function burst(x,y,count,baseSpeed,color,size=3,life=30){
+  for(let i=0;i<count;i++){
+    const a=Math.random()*Math.PI*2;
+    const s=baseSpeed*(0.4+0.6*Math.random());
+    particles.push(new Particle(x,y,size*(0.8+Math.random()*0.6),life+Math.floor(Math.random()*10),Math.cos(a)*s,Math.sin(a)*s,color));
   }
 }
 
@@ -193,7 +199,7 @@ const ID = Math.random().toString(36).slice(2,7);
 function makePlayer(isMe){
   return {
     id: isMe ? ID : "?",
-    name: isMe ? "You" : "P",
+    name: isMe ? savedName || ("You"+Math.floor(Math.random()*900)) : "P",
     x: rand(CAR_W, WORLD_W - CAR_W),
     y: rand(CAR_H, WORLD_H - CAR_H),
     angle: 0,
@@ -213,6 +219,7 @@ function makePlayer(isMe){
     dead: false,
     stunned: 0,
     respawnTimer: 0,
+    oobTimer: 0,      // out-of-bounds timer
     killer: null,
     lastHitBy: null
   };
@@ -229,7 +236,12 @@ const keyMap = {
   ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right",
   w:"up", a:"left", s:"down", d:"right", Shift:"drift"
 };
-addEventListener("keydown", e => { if (keyMap[e.key]) meKeys[keyMap[e.key]] = true; });
+addEventListener("keydown", e => {
+  // prevent arrows / space from scrolling the page (when not typing in chat)
+  const block = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "];
+  if (block.includes(e.key) && document.activeElement !== chatInput) e.preventDefault();
+  if (keyMap[e.key]) meKeys[keyMap[e.key]] = true;
+});
 addEventListener("keyup",   e => { if (keyMap[e.key]) meKeys[keyMap[e.key]] = false; });
 
 /* =========================
@@ -273,7 +285,7 @@ function rebuildHUD(){
   everyone.forEach(p=>{
     const wrap = document.createElement("div"); wrap.className = "bar";
     const name = document.createElement("div"); name.className = "name";
-    name.textContent = (p.id===me.id? "You" : p.id).slice(0,6);
+    name.textContent = (p.id===me.id? "You" : (p.name || p.id)).slice(0,10);
     const track = document.createElement("div"); track.className = "track";
     const fill = document.createElement("div"); fill.className = "fill"; fill.id = "hp-"+p.id;
     track.appendChild(fill);
@@ -282,10 +294,7 @@ function rebuildHUD(){
   });
 }
 function updateHUDValues(){
-  const setFill = (id, hp)=>{
-    const el = document.getElementById("hp-"+id);
-    if (el) el.style.width = Math.max(0, Math.min(100, hp)) + "%";
-  };
+  const setFill = (id, hp) => { const el = document.getElementById("hp-"+id); if (el) el.style.width = Math.max(0, Math.min(100, hp)) + "%"; };
   setFill(me.id, me.health);
   for (const id in remotes) setFill(id, remotes[id].state.health);
 }
@@ -299,9 +308,9 @@ const killerText = document.getElementById("killerText");
 const respawnText = document.getElementById("respawnText");
 function showDeadOverlay(show){ deadScreen.style.display = show ? "flex" : "none"; }
 
-/* =========================
+/* ==========================
    CAMERA / BORDER / RADAR
-   ========================= */
+   ========================== */
 function getCameraOffset(){
   let camX = me.x - canvas.width/2;
   let camY = me.y - canvas.height/2;
@@ -316,10 +325,19 @@ function drawBorder(){
   ctx.strokeRect(1,1, WORLD_W-2, WORLD_H-2);
   ctx.restore();
 }
-function checkBorderKill(p){
-  if (p.x < 0 || p.x > WORLD_W || p.y < 0 || p.y > WORLD_H){
-    p.health = 0; p.dead = true; p.respawnTimer = 5;
-    burst(p.x, p.y, 28, 5, "red", 4, 44);
+function checkBorderOOB(p, dt){
+  // if out of bounds, start/decrement timer; if inside, reset
+  const outside = (p.x < 0 || p.x > WORLD_W || p.y < 0 || p.y > WORLD_H);
+  if (outside){
+    if (!p.oobTimer || p.oobTimer <= 0) p.oobTimer = 6.0; // 6 seconds to get back
+    else p.oobTimer -= dt;
+    if (p.oobTimer <= 0){
+      // die
+      p.health = 0; p.dead = true; p.respawnTimer = 5;
+      burst(p.x, p.y, 28, 5, "red", 4, 44);
+    }
+  } else {
+    p.oobTimer = 0;
   }
 }
 function drawRadar(){
@@ -330,15 +348,14 @@ function drawRadar(){
   ctx.fillStyle = "rgba(0,0,0,0.6)";
   ctx.beginPath(); ctx.arc(centerX, centerY, radarRadius, 0, Math.PI*2); ctx.fill();
   // you
-  ctx.fillStyle = "lime";
-  ctx.beginPath(); ctx.arc(centerX, centerY, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "lime"; ctx.beginPath(); ctx.arc(centerX, centerY, 4, 0, Math.PI*2); ctx.fill();
   // others (nearby)
   for(const id in remotes){
     const r = remotes[id].state;
     if (r.dead) continue;
     const dx = r.x - me.x, dy = r.y - me.y;
     const dist = Math.hypot(dx, dy);
-    const maxRadarDist = 400;
+    const maxRadarDist = 600; // shows further
     if (dist <= maxRadarDist){
       const rx = centerX + (dx / maxRadarDist) * radarRadius;
       const ry = centerY + (dy / maxRadarDist) * radarRadius;
@@ -350,7 +367,7 @@ function drawRadar(){
 }
 
 /* =======================
-   DRAWING / CAR RENDER
+   DRAWING / NAME TAGS
    ======================= */
 function drawCar(x, y, angle, slip, image){
   ctx.save();
@@ -359,29 +376,47 @@ function drawCar(x, y, angle, slip, image){
   ctx.drawImage(image, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H);
   ctx.restore();
 }
+function drawNameTag(x, y, name, camX, camY){
+  // draw above the car in screen space
+  const sx = x - camX;
+  const sy = y - camY - CAR_H/2 - 10;
+  ctx.save();
+  ctx.font = "14px system-ui";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  const w = ctx.measureText(name).width + 12;
+  ctx.fillRect(sx - w/2, sy - 18, w, 20);
+  ctx.fillStyle = "white";
+  ctx.fillText(name, sx, sy - 4);
+  ctx.restore();
+}
 
 /* ============================
    LOCAL PHYSICS / MOVEMENT
+   (tiny tweak: movement disabled while typing in chat)
    ============================ */
 function updateLocal(dt){
   const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
   const sideX = -fwdY, sideY = fwdX;
 
   if (!me.dead){
-    if (me.stunned > 0){
-      me.stunned -= dt*60;
-    } else {
-      if (meKeys.up){ me.vx += fwdX * me.accel * 60 * dt; me.vy += fwdY * me.accel * 60 * dt; }
-      if (meKeys.down){ me.vx -= fwdX * me.brake * 60 * dt * 0.7; me.vy -= fwdY * me.brake * 60 * dt * 0.7; }
-      const speed = Math.hypot(me.vx, me.vy);
-      const turnBase = me.baseTurn * (0.6 + 0.4*Math.min(1, speed/6));
-      const drifting = !!meKeys.drift && speed > 1.2;
-      me.drift = drifting;
-      const turn = drifting ? (turnBase + me.driftTurn) : turnBase;
-      if (meKeys.left)  me.angle -= turn * 60 * dt;
-      if (meKeys.right) me.angle += turn * 60 * dt;
-      // light drift push
-      if (drifting){ me.vx += sideX * 0.06 * 60 * dt; me.vy += sideY * 0.06 * 60 * dt; }
+    if (me.stunned > 0) me.stunned -= dt*60;
+    else {
+      // don't process movement keys if typing in chat
+      const typing = (document.activeElement === chatInput);
+      if (!typing){
+        if (meKeys.up){ me.vx += fwdX * me.accel * 60 * dt; me.vy += fwdY * me.accel * 60 * dt; }
+        if (meKeys.down){ me.vx -= fwdX * me.brake * 60 * dt * 0.7; me.vy -= fwdY * me.brake * 60 * dt * 0.7; }
+        const speed = Math.hypot(me.vx, me.vy);
+        const turnBase = me.baseTurn * (0.6 + 0.4*Math.min(1, speed/6));
+        const drifting = !!meKeys.drift && speed > 1.2;
+        me.drift = drifting;
+        const turn = drifting ? (turnBase + me.driftTurn) : turnBase;
+        if (meKeys.left)  me.angle -= turn * 60 * dt;
+        if (meKeys.right) me.angle += turn * 60 * dt;
+        if (drifting){ me.vx += sideX * 0.06 * 60 * dt; me.vy += sideY * 0.06 * 60 * dt; }
+      }
     }
   }
 
@@ -397,7 +432,8 @@ function updateLocal(dt){
   me.vx *= me.drag; me.vy *= me.drag;
 
   // move
-  me.x += me.vx * 60 * dt; me.y += me.vy * 60 * dt;
+  me.x += me.vx * 60 * dt;
+  me.y += me.vy * 60 * dt;
 
   // tiny exhaust while moving
   if (!me.dead && Math.hypot(me.vx,me.vy) > 0.5 && Math.random() < 0.25){
@@ -415,8 +451,8 @@ function updateLocal(dt){
     burst(backX, backY, 1, 1.4, "orange", 2, 14);
   }
 
-  // border kill
-  checkBorderKill(me);
+  // out-of-bounds handling: starts timer rather than killing instantly
+  checkBorderOOB(me, dt);
 
   return slipMag;
 }
@@ -438,23 +474,27 @@ function collideLocalWithRemote(remoteState){
   const combined = meSpeed + themSpeed;
 
   if (combined > 8) {
-    // high speed => both explode
+    // high speed => both explode (local prediction)
     if (!me.dead){
       me.health = 0; me.dead = true; me.respawnTimer = 5;
+      me.killer = remoteState.id || remoteState.name || "unknown";
       burst(me.x, me.y, 28, 5, "red", 4, 44);
     }
-    // locally show the other blowing up (visual only)
-    remoteState.health = 0; remoteState.dead = true; remoteState.respawnTimer = 5;
-    burst(remoteState.x, remoteState.y, 28, 5, "red", 4, 44);
+    // show remote as dead visually (we set their state locally for visuals)
+    if (remotes[remoteState.id]){
+      remotes[remoteState.id].state.health = 0;
+      remotes[remoteState.id].state.dead = true;
+      remotes[remoteState.id].state.respawnTimer = 5;
+      burst(remoteState.x, remoteState.y, 28, 5, "red", 4, 44);
+    }
   } else {
-    // low speed => stop (snappy)
+    // low speed => stop both quickly
     me.vx *= 0.1; me.vy *= 0.1;
     if (remotes[remoteState.id]) {
       remotes[remoteState.id].state.vx *= 0.1;
       remotes[remoteState.id].state.vy *= 0.1;
     }
-    // little bump spark
-    burst((me.x+remoteState.x)/2,(me.y+remoteState.y)/2, 6, 2.5, "yellow", 2, 18);
+    burst((me.x+remoteState.x)/2, (me.y+remoteState.y)/2, 6, 2.5, "yellow", 2, 18);
   }
 }
 
@@ -470,6 +510,7 @@ function respawn(p){
   p.dead = false;
   p.stunned = 0;
   p.killer = null;
+  p.oobTimer = 0;
   burst(p.x, p.y, 16, 3.5, "lime", 4, 36);
 }
 
@@ -484,12 +525,15 @@ channel.subscribe("player-state", (msg) => {
   if (!obj){
     obj = remotes[d.id] = { state: makePlayer(false), history: [], lastSeen: performance.now() };
     obj.state.id = d.id;
-    obj.state.name = d.id;
+    obj.state.name = d.name || d.id;
     rebuildHUD();
   }
+  // update visual state
   obj.state.health = d.health;
   obj.state.dead = d.dead;
   obj.state.respawnTimer = d.respawnTimer || 0;
+  obj.state.oobTimer = d.oobTimer || 0;
+  if (d.name) obj.state.name = d.name;
 
   pushHistory(obj, {
     x: d.x, y: d.y, angle: d.angle, vx: d.vx, vy: d.vy,
@@ -507,9 +551,8 @@ function loop(now){
 
   // local update
   let slip = 0;
-  if (!me.dead){
-    slip = updateLocal(dt);
-  } else {
+  if (!me.dead) slip = updateLocal(dt);
+  else {
     me.respawnTimer -= dt;
     if (me.respawnTimer <= 0) respawn(me);
   }
@@ -517,7 +560,7 @@ function loop(now){
   // remote interpolation & timers
   for (const id in remotes){
     const o = remotes[id];
-    if (now - o.lastSeen > 8000){ delete remotes[id]; rebuildHUD(); continue; }
+    if (now - o.lastSeen > 10000){ delete remotes[id]; rebuildHUD(); continue; }
     const s = getInterpolatedState(o.history, now);
     if (s){
       o.state.x = s.x; o.state.y = s.y; o.state.angle = s.angle; o.state.vx = s.vx; o.state.vy = s.vy;
@@ -526,6 +569,8 @@ function loop(now){
       o.state.respawnTimer -= dt;
       if (o.state.respawnTimer <= 0) respawn(o.state);
     }
+    // decrement their oob timer visually if set (best-effort)
+    if (o.state.oobTimer && o.state.oobTimer > 0) o.state.oobTimer = Math.max(0, o.state.oobTimer - dt);
   }
 
   // player-vs-player collisions
@@ -537,10 +582,10 @@ function loop(now){
   // death overlay for me
   if (me.health <= 0 && !me._flaggedDead){
     me._flaggedDead = true;
-    killerText.textContent = `You were wrecked!`;
+    killerText.textContent = `You were wrecked by ${me.killer ? (me.killer.slice ? me.killer.slice(0,6) : me.killer) : "the world"}`;
   }
   if (me.dead){
-    document.getElementById("respawnText").textContent = `Respawning in ${Math.ceil(me.respawnTimer)}…`;
+    respawnText.textContent = `Respawning in ${Math.ceil(me.respawnTimer)}…`;
     showDeadOverlay(true);
   } else {
     me._flaggedDead = false;
@@ -570,12 +615,13 @@ function loop(now){
     if (particles[i].life <= 0) particles.splice(i,1);
   }
 
-  // cars
+  // cars + name tags
   if (!me.dead){
     const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
     const sideX = -fwdY, sideY = fwdX;
     const vLat = me.vx*sideX + me.vy*sideY;
     drawCar(me.x, me.y, me.angle, vLat, carMe);
+    drawNameTag(me.x, me.y, me.name, camX, camY);
   }
   for (const id in remotes){
     const r = remotes[id].state;
@@ -584,6 +630,7 @@ function loop(now){
     const sideX = -fwdY, sideY = fwdX;
     const vLat = (r.vx||0)*sideX + (r.vy||0)*sideY;
     drawCar(r.x, r.y, r.angle, vLat, carOther);
+    drawNameTag(r.x, r.y, r.name || id.slice(0,6), camX, camY);
   }
 
   ctx.restore();
@@ -591,19 +638,30 @@ function loop(now){
   // radar overlay (screen space)
   drawRadar();
 
+  // OOB warning overlay (screen)
+  if (me.oobTimer && me.oobTimer > 0 && !me.dead){
+    const w = Math.max(0, Math.ceil(me.oobTimer));
+    const el = document.getElementById('oobWarn');
+    el.style.display = 'block';
+    el.textContent = `Return to play area — ${w}s`;
+  } else {
+    const el = document.getElementById('oobWarn');
+    el.style.display = 'none';
+  }
+
   // HUD values
   updateHUDValues();
 
-  // broadcast state
+  // broadcast state (include name + oobTimer)
   if (now - lastSent > SEND_MS){
     channel.publish("player-state", {
-      id: me.id,
+      id: me.id, name: me.name,
       x: me.x, y: me.y, angle: me.angle,
       vx: me.vx, vy: me.vy,
       speed: Math.hypot(me.vx, me.vy),
-      health: me.health,
-      dead: me.dead,
-      respawnTimer: me.respawnTimer
+      health: me.health, dead: me.dead,
+      respawnTimer: me.respawnTimer,
+      oobTimer: me.oobTimer || 0
     });
     lastSent = now;
   }

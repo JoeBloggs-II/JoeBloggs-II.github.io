@@ -38,6 +38,11 @@
 <!-- Game canvas -->
 <canvas id="game"></canvas>
 
+<div id="nameEntry" style="text-align: center; margin-bottom: 10px;">
+  <input type="text" id="playerName" placeholder="Enter your name">
+  <button id="startBtn">Start Game</button>
+</div>
+
 <!-- Ably -->
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 
@@ -96,6 +101,41 @@ chatBtn.addEventListener("click", () => {
   if (chatOpen) setTimeout(() => chatInput.focus(), 0);
 });
 
+
+const startBtn = document.getElementById("startBtn");
+const nameEntry = document.getElementById("nameEntry");
+const playerNameInput = document.getElementById("playerName");
+
+// Load name from cookie if exists
+function getCookie(name) {
+  let match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+  return match ? match[2] : null;
+}
+
+function setCookie(name, value, days) {
+  let expires = "";
+  if (days) {
+    const date = new Date();
+    date.setTime(date.getTime() + (days*24*60*60*1000));
+    expires = "; expires=" + date.toUTCString();
+  }
+  document.cookie = name + "=" + value + expires + "; path=/";
+}
+
+// Pre-fill name if stored
+const savedName = getCookie("playerName");
+if (savedName) {
+  playerNameInput.value = savedName;
+}
+
+// Wait for player to press Start
+startBtn.onclick = () => {
+  const name = playerNameInput.value.trim() || "Player";
+  setCookie("playerName", name, 365);
+  nameEntry.style.display = "none";
+  startGame(name);
+};
+  
 /* ================
    CANVAS & ASSETS
    ================ */

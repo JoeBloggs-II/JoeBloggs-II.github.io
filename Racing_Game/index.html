@@ -181,13 +181,17 @@ const killerText = document.getElementById("killerText");
 const respawnText = document.getElementById("respawnText");
 function showDeadOverlay(show){ deadScreen.style.display=show?"flex":"none"; }
 
-/* ==========================
+/* =========================
    CAMERA / BORDER / RADAR
-   ========================== */
-function getCameraOffset(){ let camX=me.x-canvas.width/2; let camY=me.y-canvas.height/2; camX=Math.max(0,Math.min(camX,WORLD_W-canvas.width)); camY=Math.max(0,Math.min(camY,WORLD_H-canvas.height)); return {camX,camY}; }
-function drawBorder(){ ctx.save(); ctx.lineWidth=2; ctx.strokeStyle="red"; ctx.strokeRect(1,1,WORLD_W-2,WORLD_H-2); ctx.restore(); }
-function drawRadar(){ const radarRadius=60; const centerX=canvas.width-80; const centerY=80; ctx.save(); ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.beginPath(); ctx.arc(centerX,centerY,radarRadius,0,Math.PI*2); ctx.fill(); ctx.fillStyle="lime"; ctx.beginPath(); ctx.arc(centerX,centerY,4,0,Math.PI*2); ctx.fill(); for(const id in remotes){ const r=remotes[id].state; if(r.dead)continue; const dx=r.x-me.x,dy=r.y-me.y,dist=Math.hypot(dx,dy),maxRadarDist=400; if(dist<=maxRadarDist){ const rx=centerX+(dx/maxRadarDist)*radarRadius,ry=centerY+(dy/maxRadarDist)*radarRadius; ctx.fillStyle="red"; ctx.beginPath(); ctx.arc(rx,ry,4,0,Math.PI*2); ctx.fill(); } } ctx.restore(); }
-
+   ========================= */
+function getCameraOffset(){
+  let camX = me.x - canvas.width/2;
+  let camY = me.y - canvas.height/2;
+  camX = Math.max(0, Math.min(camX, WORLD_W - canvas.width));
+  camY = Math.max(0, Math.min(camY, WORLD_H - canvas.height));
+  return {camX, camY};
+}
+  
 /* =====================
    DRAW CAR + NAMETAGS
    ===================== */
@@ -203,25 +207,70 @@ function drawCar(x,y,angle,slip,image,name){
   }
 }
 
-/* ============================
+  /* ============================
    LOCAL PHYSICS / MOVEMENT
    ============================ */
-function updateLocal(dt){ 
-  const fwdX=Math.cos(me.angle),fwdY=Math.sin(me.angle),sideX=-fwdY,sideY=fwdX;
-  if(!me.dead){ if(me.stunned>0){ me.stunned-=dt*60; }else{ if(meKeys.up){ me.vx+=fwdX*me.accel*60*dt; me.vy+=fwdY*me.accel*60*dt; } if(meKeys.down){ me.vx-=fwdX*me.brake*60*dt*0.7; me.vy-=fwdY*me.brake*60*dt*0.7; } const speed=Math.hypot(me.vx,me.vy); const turnBase=me.baseTurn*(0.6+0.4*Math.min(1,speed/6)); const drifting=!!meKeys.drift && speed>1.2; me.drift=drifting; const turn=drifting?(turnBase+me.driftTurn):turnBase; if(meKeys.left)me.angle-=turn*60*dt; if(meKeys.right)me.angle+=turn*60*dt; if(drifting){ me.vx+=sideX*0.06*60*dt; me.vy+=sideY*0.06*60*dt; } } }
-  const vLong=me.vx*fwdX+me.vy*fwdY, vLat=me.vx*sideX+me.vy*sideY;
-  const cappedLong=Math.max(me.speedCapBack,Math.min(me.speedCapFwd,vLong));
-  const latGrip=me.drift?me.gripLatDrift:me.gripLat;
-  const newVLong=cappedLong*me.gripLong, newVLat=vLat*latGrip;
-  me.vx=fwdX*newVLong+sideX*newVLat; me.vy=fwdY*newVLong+sideY*newVLat;
-  me.vx*=me.drag; me.vy*=me.drag;
-  me.x+=me.vx*60*dt; me.y+=me.vy*60*dt;
-  if(!me.dead && Math.hypot(me.vx,me.vy)>0.5 && Math.random()<0.25){ particles.push(new Particle(me.x-fwdX*20+(Math.random()-0.5)*6,me.y-fwdY*20+(Math.random()-0.5)*6,2,16,(-fwdX+(Math.random()-0.5))*0.6,(-fwdY+(Math.random()-0.5))*0.6,"orange")); }
-  // OOB
-  if(me.x<0||me.x>WORLD_W||me.y<0||me.y>WORLD_H){ me.oobTimer+=dt; if(me.oobTimer>=OOB_LIMIT){ me.dead=true; me.respawnTimer=3; me.killer="Out-of-bounds"; showDeadOverlay(true); killerText.textContent="You were eliminated by "+me.killer; respawnText.textContent="Respawning in 3s..."; } } else { me.oobTimer=0; }
+function updateLocal(dt){
+  const fwdX = Math.cos(me.angle), fwdY = Math.sin(me.angle);
+  const sideX = -fwdY, sideY = fwdX;
+
+  if (!me.dead){
+    if (me.stunned > 0){
+      me.stunned -= dt*60;
+    } else {
+      if (meKeys.up){ me.vx += fwdX * me.accel * 60 * dt; me.vy += fwdY * me.accel * 60 * dt; }
+      if (meKeys.down){ me.vx -= fwdX * me.brake * 60 * dt * 0.7; me.vy -= fwdY * me.brake * 60 * dt * 0.7; }
+
+      const speed = Math.hypot(me.vx, me.vy);
+      const turnBase = me.baseTurn * (0.6 + 0.4*Math.min(1, speed/6));
+      const drifting = !!meKeys.drift && speed > 1.2;
+      me.drift = drifting;
+      const turn = drifting ? (turnBase + me.driftTurn) : turnBase;
+      if (meKeys.left)  me.angle -= turn * 60 * dt;
+      if (meKeys.right) me.angle += turn * 60 * dt;
+
+      // lateral drift push
+      if (drifting){ me.vx += sideX * 0.06 * 60 * dt; me.vy += sideY * 0.06 * 60 * dt; }
+    }
+  }
+
+  // velocity decomposition
+  const vLong = me.vx * fwdX + me.vy * fwdY;
+  const vLat  = me.vx * sideX + me.vy * sideY;
+  const cappedLong = Math.max(me.speedCapBack, Math.min(me.speedCapFwd, vLong));
+  const latGrip = me.drift ? me.gripLatDrift : me.gripLat;
+  const newVLong = cappedLong * me.gripLong;
+  const newVLat  = vLat * latGrip;
+  me.vx = fwdX * newVLong + sideX * newVLat;
+  me.vy = fwdY * newVLong + sideY * newVLat;
+  me.vx *= me.drag; me.vy *= me.drag;
+
+  // move
+  me.x += me.vx * 60 * dt; me.y += me.vy * 60 * dt;
+
+  // exhaust particles
+  if (!me.dead && Math.hypot(me.vx,me.vy) > 0.5 && Math.random() < 0.25){
+    particles.push(new Particle(
+      me.x - fwdX*20 + (Math.random()-0.5)*6,
+      me.y - fwdY*20 + (Math.random()-0.5)*6,
+      2, 16, (-fwdX + (Math.random()-0.5))*0.6, (-fwdY + (Math.random()-0.5))*0.6, "rgba(220,220,220,1)"
+    ));
+  }
+
+  // drift sparks
+  const slipMag = Math.abs(vLat);
+  if (me.drift && slipMag > 0.6 && Math.random() < 0.5){
+    const backX = me.x - fwdX * 26, backY = me.y - fwdY * 26;
+    burst(backX, backY, 1, 1.4, "orange", 2, 14);
+  }
+
+  // border kill
+  checkBorderKill(me);
+
+  return slipMag;
 }
 
-/* ====================
+  /* ====================
    MAIN LOOP
    ==================== */
 let lastTime = performance.now();

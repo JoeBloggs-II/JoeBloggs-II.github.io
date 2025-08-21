@@ -42,6 +42,14 @@
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 
 <script>
+  //Stop keys from scrolling page
+  window.addEventListener("keydown", function(e) {
+    // Prevent arrow keys and space from scrolling the page
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+        e.preventDefault();
+    }
+}, false);
+
 /* =========================
    CHAT UI (button + sidebar)
    ========================= */

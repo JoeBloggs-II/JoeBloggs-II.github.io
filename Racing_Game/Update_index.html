@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Turbo Trackers — Arcade Drift Multiplayer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin:0; overflow:hidden; background:#111; height:100%; }
+  canvas { display:block; background:#202225; width:100vw; height:100vh; }
+  #hud {
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    display:flex; gap:16px; color:#fff; font-family:system-ui, sans-serif;
+    font-size:14px; font-weight:700; z-index:10; flex-wrap:wrap; justify-content:center;
+  }
+  .bar { display:flex; align-items:center; gap:6px; }
+  .bar .name { opacity:0.8; min-width:54px; text-align:right; }
+  .bar .track { width:140px; height:12px; background:#3a3d41; border:1px solid #9aa0a6; border-radius:6px; overflow:hidden; }
+  .bar .fill { height:100%; width:100%; background:linear-gradient(90deg, #33ff66, #aaff33); }
+
+  #deadScreen { position:absolute; inset:0; display:none; z-index:20;
+    background:rgba(0,0,0,0.72); color:#fff; font-family:system-ui, sans-serif;
+    align-items:center; justify-content:center; flex-direction:column; gap:16px;
+    text-align:center; padding:24px;
+  }
+  #deadScreen .title { font-size:28px; font-weight:800; letter-spacing:0.5px; }
+  #deadScreen .sub { font-size:18px; opacity:0.9; }
+</style>
+</head>
+<body>
+
+<!-- HUD + Dead overlay -->
+<div id="hud"></div>
+<div id="deadScreen">
+  <div class="title" id="killerText"></div>
+  <div class="sub" id="respawnText"></div>
+</div>
+
+<!-- Game canvas -->
+<canvas id="game"></canvas>
+
+<div id="nameEntry" style="text-align: center; margin-bottom: 10px;">
+  <input type="text" id="playerName" placeholder="Enter your name">
+  <button id="startBtn">Start Game</button>
+</div>
+
+<!-- Ably -->
+<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+
+<script>
+window.addEventListener("keydown", function(e){
+  if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+}, false);
+
+/* =================
+   CHAT UI
+   ================= */
+const chatBtn=document.createElement("div");
+chatBtn.id="chatBtn";
+chatBtn.style=`position:absolute; top:12px; right:12px; width:32px; height:28px; cursor:pointer; z-index:15;
+display:flex; flex-direction:column; justify-content:space-around; padding:4px; background:rgba(0,0,0,0.55);
+border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.4);`;
+for(let i=0;i<3;i++){ const line=document.createElement("div"); line.style="height:3px; background:#fff; border-radius:2px;"; chatBtn.appendChild(line);}
+document.body.appendChild(chatBtn);
+
+const chatSidebar=document.createElement("div");
+chatSidebar.id="chatSidebar";
+chatSidebar.style=`position:absolute; top:0; right:-300px; width:300px; height:100%; background:#1d1f22; color:#fff;
+font-family:system-ui; box-shadow:-6px 0 12px rgba(0,0,0,0.35); display:flex; flex-direction:column; padding:10px 10px 12px 10px;
+transition:right 0.25s; z-index:14;`;
+document.body.appendChild(chatSidebar);
+
+const chatLog=document.createElement("div");
+chatLog.style="flex:1 1 auto; overflow-y:auto; font-size:14px; line-height:1.35;";
+chatSidebar.appendChild(chatLog);
+
+const chatInput=document.createElement("input");
+chatInput.placeholder="Type message...";
+chatInput.style="flex:0 0 auto; width:100%; box-sizing:border-box; padding:8px 10px; border-radius:6px; border:none; outline:none; background:#2a2d31; color:#fff;";
+chatSidebar.appendChild(chatInput);
+
+let chatOpen=false;
+chatBtn.addEventListener("click",()=>{ chatOpen=!chatOpen; chatSidebar.style.right=chatOpen?"0px":"-300px"; if(chatOpen)setTimeout(()=>chatInput.focus(),0); });
+
+/* =================
+   NAME & START
+   ================= */
+const startBtn=document.getElementById("startBtn");
+const nameEntry=document.getElementById("nameEntry");
+const playerNameInput=document.getElementById("playerName");
+
+function getCookie(name){ let match=document.cookie.match(new RegExp('(^| )'+name+'=([^;]+)')); return match?match[2]:null; }
+function setCookie(name,value,days){ let expires=""; if(days){ const date=new Date(); date.setTime(date.getTime()+(days*24*60*60*1000)); expires="; expires="+date.toUTCString();} document.cookie=name+"="+value+expires+"; path=/"; }
+const savedName=getCookie("playerName");
+if(savedName) playerNameInput.value=savedName;
+
+/* =================
+   CANVAS
+   ================= */
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+function resize(){ canvas.width=innerWidth; canvas.height=innerHeight; }
+addEventListener("resize",resize); resize();
+
+const carMe=new Image(); carMe.src="assets/red_car.svg";
+const carOther=new Image(); carOther.src="assets/blue_car.svg";
+const CAR_W=96, CAR_H=47.6;
+
+/* =================
+   WORLD & PARTICLES
+   ================= */
+const WORLD_W=5000, WORLD_H=5000;
+const obstacles=[
+  {x:450,y:700,w:240,h:50},
+  {x:1400,y:1200,w:120,h:160},
+  {x:2300,y:900,w:200,h:60},
+  {x:3300,y:2200,w:140,h:140},
+  {x:4100,y:1100,w:180,h:80}
+];
+const particles=[];
+class Particle{ constructor(x,y,size,life,vx,vy,color){ this.x=x; this.y=y; this.size=size; this.life=life; this.vx=vx||0; this.vy=vy||0; this.color=color||"white"; this.maxLife=life; } update(){ this.life--; this.x+=this.vx; this.y+=this.vy; } draw(){ ctx.globalAlpha=Math.max(0,this.life/this.maxLife); ctx.fillStyle=this.color; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; } }
+function burst(x,y,count,baseSpeed,color,size=3,life=30){ for(let i=0;i<count;i++){ const a=Math.random()*Math.PI*2; const s=baseSpeed*(0.4+0.6*Math.random()); particles.push(new Particle(x,y,size*(0.8+Math.random()*0.6),life+Math.floor(Math.random()*10),Math.cos(a)*s,Math.sin(a)*s,color)); }}
+
+/* =================
+   PLAYERS
+   ================= */
+function rand(a,b){ return a+Math.random()*(b-a); }
+const ID=Math.random().toString(36).slice(2,7);
+function makePlayer(isMe){ return { id:isMe?ID:"?", name:isMe?"You":"P", x:rand(CAR_W,WORLD_W-CAR_W), y:rand(CAR_H,WORLD_H-CAR_H), angle:0, vx:0, vy:0, speedCapFwd:10, speedCapBack:-3, accel:0.25, brake:0.18, baseTurn:0.04, driftTurn:0.05, gripLong:0.985, gripLat:0.8, gripLatDrift:0.95, drag:0.992, drift:false, health:100, dead:false, stunned:0, respawnTimer:0, killer:null, lastHitBy:null }; }
+const me=makePlayer(true);
+const remotes={};
+const HISTORY=24, INTERP_DELAY=120, SEND_MS=50;
+
+/* =================
+   INPUT
+   ================= */
+const meKeys={};
+const keyMap={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",a:"left",s:"down",d:"right",Shift:"drift"};
+addEventListener("keydown",e=>{ if(keyMap[e.key]) meKeys[keyMap[e.key]]=true; });
+addEventListener("keyup",e=>{ if(keyMap[e.key]) meKeys[keyMap[e.key]]=false; });
+
+/* =================
+   NETWORKING
+   ================= */
+const API_KEY="Nllp5A.3TYLaQ:G74XydAZRQIJ0-IwWsjhBj6HNcaeiYjdyWUc4zq1TiE";
+const ROOM="racing-room";
+const ably=new Ably.Realtime(API_KEY);
+const channel=ably.channels.get(ROOM);
+
+/* =================
+   HUD / DEAD OVERLAY
+   ================= */
+const hud=document.getElementById("hud");
+const deadScreen=document.getElementById("deadScreen");
+const killerText=document.getElementById("killerText");
+const respawnText=document.getElementById("respawnText");
+function rebuildHUD(){ hud.innerHTML=""; const everyone=[me,...Object.values(remotes).map(r=>r.state)]; everyone.forEach(p=>{ const wrap=document.createElement("div"); wrap.className="bar"; const name=document.createElement("div"); name.className="name"; name.textContent=(p.id===me.id?"You":p.id).slice(0,6); const track=document.createElement("div"); track.className="track"; const fill=document.createElement("div"); fill.className="fill"; fill.id="hp-"+p.id; track.appendChild(fill); wrap.appendChild(name); wrap.appendChild(track); hud.appendChild(wrap); });}
+function updateHUDValues(){ const setFill=(id,hp)=>{ const el=document.getElementById("hp-"+id); if(el) el.style.width=Math.max(0,Math.min(100,hp))+"%";}; setFill(me.id,me.health); for(const id in remotes)setFill(id,remotes[id].state.health); }
+function showDeadOverlay(show){ deadScreen.style.display=show?"flex":"none"; }
+
+/* =================
+   CAMERA / BORDER / RADAR
+   ================= */
+function getCameraOffset(){ let camX=me.x-canvas.width/2; let camY=me.y-canvas.height/2; camX=Math.max(0,Math.min(camX,WORLD_W-canvas.width)); camY=Math.max(0,Math.min(camY,WORLD_H-canvas.height)); return {camX,camY}; }
+function drawBorder(){ ctx.save(); ctx.lineWidth=2; ctx.strokeStyle="red"; ctx.strokeRect(1,1,WORLD_W-2,WORLD_H-2); ctx.restore(); }
+function checkBorderKill(p){ if(p.x<0||p.x>WORLD_W||p.y<0||p.y>WORLD_H){ p.health=0;p.dead=true;p.respawnTimer=5; burst(p.x,p.y,28,5,"red",4,44); } }
+function drawRadar(){ const radarRadius=60, centerX=canvas.width-80, centerY=80; ctx.save(); ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.beginPath(); ctx.arc(centerX,centerY,radarRadius,0,Math.PI*2); ctx.fill(); ctx.fillStyle="lime"; ctx.beginPath(); ctx.arc(centerX,centerY,4,0,Math.PI*2); ctx.fill(); for(const id in remotes){ const r=remotes[id].state;if(r.dead)continue; const dx=r.x-me.x, dy=r.y-me.y, dist=Math.hypot(dx,dy), maxRadarDist=400;if(dist<=maxRadarDist){ const rx=centerX+(dx/maxRadarDist)*radarRadius, ry=centerY+(dy/maxRadarDist)*radarRadius; ctx.fillStyle="red"; ctx.beginPath(); ctx.arc(rx,ry,4,0,Math.PI*2); ctx.fill();}} ctx.restore(); }
+function drawCar(x,y,angle,slip,image){ ctx.save(); ctx.translate(x,y); ctx.rotate(angle+slip*0.1); ctx.drawImage(image,-CAR_W/2,-CAR_H/2,CAR_W,CAR_H); ctx.restore(); }
+
+/* =================
+   LOCAL PHYSICS
+   ================= */
+function updateLocal(dt){ const fwdX=Math.cos(me.angle),fwdY=Math.sin(me.angle),sideX=-fwdY,sideY=fwdX; if(!me.dead){ if(me.stunned>0) me.stunned-=dt*60; else{ if(meKeys.up){ me.vx+=fwdX*me.accel*60*dt; me.vy+=fwdY*me.accel*60*dt; } if(meKeys.down){ me.vx-=fwdX*me.brake*60*dt*0.7; me.vy-=fwdY*me.brake*60*dt*0.7; } const speed=Math.hypot(me.vx,me.vy),turnBase=me.baseTurn*(0.6+0.4*Math.min(1,speed/6)),drifting=!!meKeys.drift&&speed>1.2; me.drift=drifting; const turn=drifting?(turnBase+me.driftTurn):turnBase; if(meKeys.left) me.angle-=turn*60*dt; if(meKeys.right) me.angle+=turn*60*dt; if(drifting){ me.vx+=sideX*0.06*60*dt; me.vy+=sideY*0.06*60*dt; } } } const vLong=me.vx*fwdX+me.vy*fwdY, vLat=me.vx*sideX+me.vy*sideY, cappedLong=Math.max(me.speedCapBack,Math.min(me.speedCapFwd,vLong)),latGrip=me.drift?me.gripLatDrift:me.gripLat,newVLong=cappedLong*me.gripLong,newVLat=vLat*latGrip; me.vx=fwdX*newVLong+sideX*newVLat; me.vy=fwdY*newVLong+sideY*newVLat; me.vx*=me.drag; me.vy*=me.drag; me.x+=me.vx*60*dt; me.y+=me.vy*60*dt; if(!me.dead&&Math.hypot(me.vx,me.vy)>0.5&&Math.random()<0.25){ particles.push(new Particle(me.x-fwdX*20+(Math.random()-0.5)*6,me.y-fwdY*20+(Math.random()-0.5)*6,2,16,(-fwdX+(Math.random()-0.5))*0.6,(-fwdY+(Math.random()-0.5))*0.6,"rgba(220,220,220,1)")); } const slipMag=Math.abs(vLat); if(me.drift&&slipMag>0.6&&Math.random()<0.5){ const backX=me.x-fwdX*26,backY=me.y-fwdY*26; burst(backX,backY,1,1.4,"orange",2,14); } checkBorderKill(me); return slipMag; }
+
+/* =================
+   COLLISIONS & RESPAWN
+   ================= */
+function carRadius(){ return Math.max(CAR_W,CAR_H)*0.45; }
+function collideLocalWithRemote(r){ if(me.dead||r.dead)return; const dx=r.x-me.x,dy=r.y-me.y,dist=Math.hypot(dx,dy),rSum=carRadius()*1.8;if(dist>rSum)return; const meSpeed=Math.hypot(me.vx,me.vy),themSpeed=Math.hypot(r.vx||0,r.vy||0),combined=meSpeed+themSpeed;if(combined>8){ if(!me.dead){ me.health=0; me.dead=true; me.respawnTimer=5; burst(me.x,me.y,28,5,"red",4,44); } r.health=0; r.dead=true; r.respawnTimer=5; burst(r.x,r.y,28,5,"red",4,44);} else{ me.vx*=0.1; me.vy*=0.1; if(remotes[r.id]){ remotes[r.id].state.vx*=0.1; remotes[r.id].state.vy*=0.1; } burst((me.x+r.x)/2,(me.y+r.y)/2,6,2.5,"yellow",2,18); }}
+function respawn(p){ p.x=rand(CAR_W,WORLD_W-CAR_W); p.y=rand(CAR_H,WORLD_H-CAR_H); p.vx=p.vy=0; p.angle=rand(0,Math.PI*2); p.health=100; p.dead=false; p.stunned=0; p.killer=null; burst(p.x,p.y,16,3.5,"lime",4,36); }
+
+/* =================
+   NETWORK RECEIVE
+   ================= */
+channel.subscribe("player-state",(msg)=>{ const d=msg.data||{}; if(!d.id||d.id===me.id)return; let obj=remotes[d.id]; if(!obj){ obj=remotes[d.id]={state:makePlayer(false),history:[],lastSeen:performance.now()}; obj.state.id=d.id; obj.state.name=d.id; rebuildHUD(); } obj.state.health=d.health; obj.state.dead=d.dead; obj.state.respawnTimer=d.respawnTimer||0; obj.history.push({x:d.x,y:d.y,angle:d.angle,vx:d.vx,vy:d.vy,speed:Math.hypot(d.vx,d.vy),t:performance.now()}); if(obj.history.length>HISTORY)obj.history.shift(); obj.lastSeen=performance.now();});
+
+/* =================
+   START GAME
+   ================= */
+function startGame(playerName){ nameEntry.style.display="none"; rebuildHUD(); requestAnimationFrame(loop); }
+startBtn.onclick=()=>{ const name=playerNameInput.value.trim()||"Player"; setCookie("playerName",name,365); startGame(name); };
+
+/* =================
+   MAIN LOOP
+   ================= */
+let last=performance.now(), lastSent=0;
+function loop(now){
+  const dt=Math.min(0.033,(now-last)/1000); last=now;
+  let slip=0; if(!me.dead) slip=updateLocal(dt); else{ me.respawnTimer-=dt; if(me.respawnTimer<=0) respawn(me);}
+  for(const id in remotes){ const o=remotes[id]; if(now-o.lastSeen>8000){ delete remotes[id]; rebuildHUD(); continue;} const s=o.history[o.history.length-1]; if(s){ o.state.x=s.x; o.state.y=s.y; o.state.angle=s.angle; o.state.vx=s.vx; o.state.vy=s.vy; } if(o.state.dead){ o.state.respawnTimer-=dt; if(o.state.respawnTimer<=0) respawn(o.state); } }
+  for(const id in remotes) collideLocalWithRemote(remotes[id].state);
+  if(me.health<=0&&!me._flaggedDead){ me._flaggedDead=true; killerText.textContent=`You were wrecked!`; }
+  if(me.dead){ respawnText.textContent=`Respawning in ${Math.ceil(me.respawnTimer)}…`; showDeadOverlay(true);} else{ me._flaggedDead=false; showDeadOverlay(false);}
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const {camX,camY}=getCameraOffset(); ctx.save(); ctx.translate(-camX,-camY);
+  ctx.fillStyle="#202225"; ctx.fillRect(0,0,WORLD_W,WORLD_H);
+  drawBorder();
+  ctx.fillStyle="#555"; for(const o of obstacles) ctx.fillRect(o.x,o.y,o.w,o.h);
+  for(let i=particles.length-1;i>=0;i--){ particles[i].update(); particles[i].draw(); if(particles[i].life<=0) particles.splice(i,1);}
+  if(!me.dead){ const fwdX=Math.cos(me.angle),fwdY=Math.sin(me.angle),sideX=-fwdY,sideY=fwdX; const vLat=me.vx*sideX+me.vy*sideY; drawCar(me.x,me.y,me.angle,vLat,carMe);}
+  for(const id in remotes){ const r=remotes[id].state;if(r.dead)continue; const fwdX=Math.cos(r.angle),fwdY=Math.sin(r.angle),sideX=-fwdY,sideY=fwdX,vLat=(r.vx||0)*sideX+(r.vy||0)*sideY; drawCar(r.x,r.y,r.angle,vLat,carOther);}
+  ctx.restore();
+  drawRadar();
+  updateHUDValues();
+  if(now-lastSent>SEND_MS){ channel.publish("player-state",{id:me.id,x:me.x,y:me.y,angle:me.angle,vx:me.vx,vy:me.vy,speed:Math.hypot(me.vx,me.vy),health:me.health,dead:me.dead,respawnTimer:me.respawnTimer}); lastSent=now;}
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>

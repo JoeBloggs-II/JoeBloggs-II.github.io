@@ -324,7 +324,7 @@ const ID = Math.random().toString(36).slice(2,7);
 function makePlayer(isMe){
   return {
     id: isMe ? ID : "?",
-    name: isMe ? "You" : "P",
+    name: isMe ? playerName : "P",
     x: rand(CAR_W, WORLD_W - CAR_W),
     y: rand(CAR_H, WORLD_H - CAR_H),
     angle: 0,
@@ -404,7 +404,7 @@ function rebuildHUD(){
   everyone.forEach(p=>{
     const wrap = document.createElement("div"); wrap.className = "bar";
     const name = document.createElement("div"); name.className = "name";
-    name.textContent = (p.id===me.id? "You" : p.id).slice(0,6);
+    name.textContent = (p.id===me.id? "playerName" : p.id).slice(0,6);
     const track = document.createElement("div"); track.className = "track";
     const fill = document.createElement("div"); fill.className = "fill"; fill.id = "hp-"+p.id;
     track.appendChild(fill);

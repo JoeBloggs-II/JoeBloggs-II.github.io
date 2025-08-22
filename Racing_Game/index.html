@@ -127,6 +127,25 @@ const savedName = getCookie("playerName");
 if (savedName) {
   playerNameInput.value = savedName;
 }
+function startGame(playerName) {
+  // Hide the intro screen
+  nameEntry.style.display = "none";
+
+  // Reset game state
+  score = 0;
+  gameOver = false;
+  bullets = [];
+  enemies = [];
+
+  // Update score display
+  updateScore();
+
+  // Spawn enemies
+  spawnEnemies();
+
+  // Start the main game loop
+  requestAnimationFrame(updateGame);
+}
 
 // Wait for player to press Start
 startBtn.onclick = () => {

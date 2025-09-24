@@ -17,14 +17,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
 
       - name: Extract archives
+        shell: bash
         run: |
-          for f in $(find . -name "*.zip" -o -name "*.7z"); do
+          set -e
+          shopt -s nullglob
+          for f in $(find . -type f \( -name "*.zip" -o -name "*.7z" \)); do
             echo "Extracting $f..."
             dirname="${f%.*}"
             mkdir -p "$dirname"
-            if [[ $f == *.zip ]]; then
+            if [[ "$f" == *.zip ]]; then
               unzip -o "$f" -d "$dirname"
-            elif [[ $f == *.7z ]]; then
+            elif [[ "$f" == *.7z ]]; then
               7z x -y "$f" -o"$dirname"
             fi
           done

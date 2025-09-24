@@ -1,28 +1,38 @@
-name: Auto Unzip Zips
+name: Auto Extract Archives
 
 on:
   push:
     paths:
       - '**.zip'
+      - '**.7z'
 
 jobs:
-  unzip:
+  extract:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Unzip all zips
+      - name: Install 7zip
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Extract archives
         run: |
-          for f in $(find . -name "*.zip"); do
-            echo "Unzipping $f..."
-            unzip -o "$f" -d "${f%.*}"
+          for f in $(find . -name "*.zip" -o -name "*.7z"); do
+            echo "Extracting $f..."
+            dirname="${f%.*}"
+            mkdir -p "$dirname"
+            if [[ $f == *.zip ]]; then
+              unzip -o "$f" -d "$dirname"
+            elif [[ $f == *.7z ]]; then
+              7z x -y "$f" -o"$dirname"
+            fi
           done
 
-      - name: Commit and push unzipped files
+      - name: Commit and push extracted files
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Auto-unzipped uploaded zip files" || echo "No changes to commit"
+          git commit -m "Auto-extracted uploaded archives" || echo "No changes to commit"
           git push

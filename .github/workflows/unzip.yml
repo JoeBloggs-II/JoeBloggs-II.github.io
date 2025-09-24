@@ -1,6 +1,7 @@
 name: Auto Extract Archives
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - '**.zip'

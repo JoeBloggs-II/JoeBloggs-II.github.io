@@ -1,17 +1,20 @@
 <!DOCTYPE html>
 <html>
-<body style="margin:0; overflow:hidden;">
+<body style="margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh;">
 <canvas id="canvas"></canvas>
 <script>
 const canvas = document.getElementById("canvas");
 const gl = canvas.getContext("webgl2");
 
-// Resize canvas to max square size
+// Resize canvas to max square size and handle high-DPI
 function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
     const size = Math.min(window.innerWidth, window.innerHeight);
-    canvas.width = size;
-    canvas.height = size;
-    gl.viewport(0, 0, size, size);
+    canvas.style.width = size + "px";
+    canvas.style.height = size + "px";
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    gl.viewport(0, 0, canvas.width, canvas.height);
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
@@ -31,7 +34,7 @@ uniform vec2 iResolution;
 
 vec3 mandelbrot(vec2 c) {
     vec2 z = vec2(0.0);
-    int maxIter = 200;
+    int maxIter = 500; // more iterations = finer detail
     int i;
     for(i=0; i<maxIter; i++) {
         float x = (z.x*z.x - z.y*z.y) + c.x;
@@ -40,18 +43,17 @@ vec3 mandelbrot(vec2 c) {
         if(dot(z,z) > 4.0) break;
     }
     float t = float(i)/float(maxIter);
-    return vec3(t, t*t, t*t*t); // color gradient
+    return vec3(t, t*t, t*t*t); // gradient color
 }
 
 void main() {
-    vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5); 
-    // Keep aspect square
+    vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5);
     uv.x *= iResolution.x / iResolution.y;
     vec3 color = mandelbrot(uv);
     FragColor = vec4(color, 1.0);
 }`;
 
-// Compile shader helper
+// Compile helper
 function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -62,7 +64,7 @@ function compileShader(gl, type, source) {
     return shader;
 }
 
-// Create program
+// Program
 const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
 const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
 const program = gl.createProgram();
@@ -83,7 +85,7 @@ const positionLocation = gl.getAttribLocation(program, "a_position");
 gl.enableVertexAttribArray(positionLocation);
 gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-// Set uniform
+// Uniform
 const resLoc = gl.getUniformLocation(program, "iResolution");
 gl.uniform2f(resLoc, canvas.width, canvas.height);
 

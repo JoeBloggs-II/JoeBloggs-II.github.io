@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html>
-<body style="margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh;">
+<body style="margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh; overflow:hidden;">
 <canvas id="canvas"></canvas>
 <script>
 const canvas = document.getElementById("canvas");
@@ -9,7 +9,7 @@ const gl = canvas.getContext("webgl2");
 let center = {x: -0.5, y: 0};
 let zoom = 1.0;
 
-// Resize canvas and high-DPI support
+// Resize canvas and handle high-DPI
 function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
     const size = Math.min(window.innerWidth, window.innerHeight);
@@ -34,6 +34,7 @@ out vec4 FragColor;
 uniform vec2 iResolution;
 uniform vec2 center;
 uniform float zoom;
+
 vec3 mandelbrot(vec2 c, int maxIter) {
     vec2 z = vec2(0.0);
     int i;
@@ -46,16 +47,17 @@ vec3 mandelbrot(vec2 c, int maxIter) {
     float t = float(i)/float(maxIter);
     return vec3(t, t*t, t*t*t);
 }
+
 void main() {
     vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5);
     uv.x *= iResolution.x / iResolution.y;
     uv = center + uv / zoom;
-    int maxIter = int(200.0 + 300.0*log2(zoom)); // more iterations as we zoom
+    int maxIter = int(200.0 + 300.0*log2(zoom));
     vec3 color = mandelbrot(uv, maxIter);
     FragColor = vec4(color, 1.0);
 }`;
 
-// Compile and create program
+// Compile and program
 function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -84,7 +86,7 @@ const resLoc = gl.getUniformLocation(program, "iResolution");
 const centerLoc = gl.getUniformLocation(program, "center");
 const zoomLoc = gl.getUniformLocation(program, "zoom");
 
-// Controls: mouse wheel zoom, drag to move
+// Drag controls
 let isDragging = false, lastX, lastY;
 canvas.addEventListener('mousedown', e => { isDragging = true; lastX = e.clientX; lastY = e.clientY; });
 canvas.addEventListener('mouseup', () => isDragging = false);
@@ -98,9 +100,21 @@ canvas.addEventListener('mousemove', e => {
         lastX = e.clientX; lastY = e.clientY;
     }
 });
+
+// Wheel zoom (prevent default browser zoom)
 canvas.addEventListener('wheel', e => {
-    zoom *= e.deltaY < 0 ? 1.2 : 0.8;
-});
+    e.preventDefault(); // stop page zoom
+    const rect = canvas.getBoundingClientRect();
+    // Mouse position in canvas normalized
+    const mx = (e.clientX - rect.left)/canvas.width*2 - 1;
+    const my = (e.clientY - rect.top)/canvas.height*2 - 1;
+    
+    // Adjust center so zoom feels like it’s under the mouse
+    const zoomFactor = e.deltaY < 0 ? 1.2 : 0.8;
+    center.x += mx / zoom - mx / (zoom * zoomFactor);
+    center.y -= my / zoom - my / (zoom * zoomFactor);
+    zoom *= zoomFactor;
+}, { passive: false });
 
 // Animation loop
 function render() {

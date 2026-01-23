@@ -1,162 +1,207 @@
 <!DOCTYPE html>
-<html>
-<body style="margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh; overflow:hidden;">
-<canvas id="canvas"></canvas>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mandelbrot GPU Explorer</title>
+<style>
+html, body {
+    margin: 0;
+    height: 100%;
+    background: black;
+    overflow: hidden;
+}
+
+#container {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+canvas {
+    background: black;
+    image-rendering: crisp-edges;
+    touch-action: none;
+}
+</style>
+</head>
+<body>
+<div id="container">
+    <canvas id="canvas"></canvas>
+</div>
+
 <script>
 const canvas = document.getElementById("canvas");
-const gl = canvas.getContext("webgl2");
+const gl = canvas.getContext("webgl");
 
-let center = {x: -0.5, y: 0};
-let zoom = 1.0;
+if (!gl) alert("WebGL not supported");
 
-// Resize canvas and handle high-DPI
-function resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
+let centerX = -0.5;
+let centerY = 0.0;
+let scale = 3.0;
+
+function resize() {
     const size = Math.min(window.innerWidth, window.innerHeight);
+    canvas.width = size * devicePixelRatio;
+    canvas.height = size * devicePixelRatio;
     canvas.style.width = size + "px";
     canvas.style.height = size + "px";
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
     gl.viewport(0, 0, canvas.width, canvas.height);
+    render();
 }
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
 
-// Vertex shader
-const vertexShaderSource = `#version 300 es
-in vec2 a_position;
-void main() { gl_Position = vec4(a_position, 0.0, 1.0); }`;
+window.addEventListener("resize", resize);
+resize();
 
-// Fragment shader
-const fragmentShaderSource = `#version 300 es
+/* ===== Shaders ===== */
+
+const vs = `
+attribute vec2 pos;
+void main() {
+    gl_Position = vec4(pos,0,1);
+}
+`;
+
+const fs = `
 precision highp float;
-out vec4 FragColor;
-uniform vec2 iResolution;
-uniform vec2 center;
-uniform float zoom;
 
-vec3 mandelbrot(vec2 c, int maxIter) {
+uniform vec2 center;
+uniform float scale;
+uniform vec2 resolution;
+
+int mandelbrot(vec2 c) {
     vec2 z = vec2(0.0);
     int i;
-    for(i=0; i<maxIter; i++) {
-        float x = (z.x*z.x - z.y*z.y) + c.x;
-        float y = (2.0*z.x*z.y) + c.y;
-        z = vec2(x, y);
-        if(dot(z,z) > 4.0) break;
+    for (i = 0; i < 1000; i++) {
+        if (dot(z,z) > 4.0) break;
+        z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
     }
-    float t = float(i)/float(maxIter);
-    return vec3(t, t*t, t*t*t);
+    return i;
 }
 
 void main() {
-    vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5);
-    uv.x *= iResolution.x / iResolution.y;
-    uv = center + uv / zoom;
-    int maxIter = int(200.0 + 300.0*log2(zoom));
-    vec3 color = mandelbrot(uv, maxIter);
-    FragColor = vec4(color, 1.0);
-}`;
+    vec2 uv = (gl_FragCoord.xy / resolution - 0.5);
+    uv.x *= resolution.x / resolution.y;
 
-// Compile and program
-function compileShader(gl, type, source) {
-    const shader = gl.createShader(type);
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-    if(!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(shader));
-    return shader;
+    vec2 c = center + uv * scale;
+
+    int it = mandelbrot(c);
+
+    float t = float(it) / 1000.0;
+
+    vec3 col = vec3(
+        0.5 + 0.5*cos(6.2831*(t+0.0)),
+        0.5 + 0.5*cos(6.2831*(t+0.33)),
+        0.5 + 0.5*cos(6.2831*(t+0.67))
+    );
+
+    if (it == 1000) col = vec3(0.0);
+
+    gl_FragColor = vec4(col,1.0);
 }
-const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
-const program = gl.createProgram();
-gl.attachShader(program, vertexShader);
-gl.attachShader(program, fragmentShader);
-gl.linkProgram(program);
-gl.useProgram(program);
+`;
 
-// Full-screen rectangle
-const positionBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
-const positionLocation = gl.getAttribLocation(program, "a_position");
-gl.enableVertexAttribArray(positionLocation);
-gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+}
 
-// Uniform locations
-const resLoc = gl.getUniformLocation(program, "iResolution");
-const centerLoc = gl.getUniformLocation(program, "center");
-const zoomLoc = gl.getUniformLocation(program, "zoom");
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog);
+gl.useProgram(prog);
 
-// Mouse controls
-let isDragging = false, lastX, lastY;
-canvas.addEventListener('mousedown', e => { isDragging = true; lastX = e.clientX; lastY = e.clientY; });
-canvas.addEventListener('mouseup', () => isDragging = false);
-canvas.addEventListener('mousemove', e => {
-    if(isDragging) {
-        const dx = (e.clientX - lastX)/canvas.width*3.0/zoom;
-        const dy = (e.clientY - lastY)/canvas.height*3.0/zoom;
-        center.x -= dx * (canvas.width / canvas.height);
-        center.y += dy;
-        lastX = e.clientX; lastY = e.clientY;
-    }
-});
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1,-1, 1,-1, -1,1,
+    -1,1, 1,-1, 1,1
+]), gl.STATIC_DRAW);
 
-// Mouse wheel zoom
-canvas.addEventListener('wheel', e => {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left)/canvas.width*2 - 1;
-    const my = (e.clientY - rect.top)/canvas.height*2 - 1;
-    const zoomFactor = e.deltaY < 0 ? 1.2 : 0.8;
-    center.x += mx / zoom - mx / (zoom * zoomFactor);
-    center.y -= my / zoom - my / (zoom * zoomFactor);
-    zoom *= zoomFactor;
-}, { passive: false });
+const posLoc = gl.getAttribLocation(prog, "pos");
+gl.enableVertexAttribArray(posLoc);
+gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-// Touch controls
-let lastTouchDist = 0;
-canvas.addEventListener('touchstart', e => {
-    e.preventDefault();
-    if(e.touches.length === 1) {
-        lastX = e.touches[0].clientX;
-        lastY = e.touches[0].clientY;
-    } else if(e.touches.length === 2) {
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        lastTouchDist = Math.hypot(dx, dy);
-    }
-});
+const centerLoc = gl.getUniformLocation(prog, "center");
+const scaleLoc = gl.getUniformLocation(prog, "scale");
+const resLoc = gl.getUniformLocation(prog, "resolution");
 
-canvas.addEventListener('touchmove', e => {
-    e.preventDefault();
-    if(e.touches.length === 1) {
-        const dx = (e.touches[0].clientX - lastX)/canvas.width*3.0/zoom;
-        const dy = (e.touches[0].clientY - lastY)/canvas.height*3.0/zoom;
-        center.x -= dx * (canvas.width / canvas.height);
-        center.y += dy;
-        lastX = e.touches[0].clientX;
-        lastY = e.touches[0].clientY;
-    } else if(e.touches.length === 2) {
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        const dist = Math.hypot(dx, dy);
-        const zoomFactor = dist / lastTouchDist;
-        zoom *= zoomFactor;
-        lastTouchDist = dist;
-    }
-}, { passive: false });
-
-canvas.addEventListener('touchend', e => {
-    if(e.touches.length < 2) lastTouchDist = 0;
-});
-
-// Render loop
 function render() {
+    gl.uniform2f(centerLoc, centerX, centerY);
+    gl.uniform1f(scaleLoc, scale);
     gl.uniform2f(resLoc, canvas.width, canvas.height);
-    gl.uniform2f(centerLoc, center.x, center.y);
-    gl.uniform1f(zoomLoc, zoom);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
-    requestAnimationFrame(render);
 }
+
+/* ===== Zoom logic ===== */
+
+function screenToComplex(px, py) {
+    const rect = canvas.getBoundingClientRect();
+
+    const x = (px - rect.left) / rect.width;
+    const y = (py - rect.top) / rect.height;
+
+    const aspect = canvas.width / canvas.height;
+
+    const cx = centerX + (x - 0.5) * scale * aspect;
+    const cy = centerY + (y - 0.5) * scale;
+
+    return { cx, cy };
+}
+
+function zoomAt(px, py, factor) {
+    const before = screenToComplex(px, py);
+
+    scale *= factor;
+
+    const after = screenToComplex(px, py);
+
+    centerX += before.cx - after.cx;
+    centerY += before.cy - after.cy;
+
+    render();
+}
+
+/* ===== Mouse ===== */
+
+canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 0.85 : 1.15;
+    zoomAt(e.clientX, e.clientY, f);
+}, { passive: false });
+
+/* ===== Touch ===== */
+
+let lastDist = null;
+
+canvas.addEventListener("touchmove", e => {
+    if (e.touches.length !== 2) return;
+    e.preventDefault();
+
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
+
+    const dx = t1.clientX - t2.clientX;
+    const dy = t1.clientY - t2.clientY;
+    const dist = Math.hypot(dx, dy);
+
+    const midX = (t1.clientX + t2.clientX) / 2;
+    const midY = (t1.clientY + t2.clientY) / 2;
+
+    if (lastDist !== null) {
+        const factor = lastDist / dist;
+        zoomAt(midX, midY, factor);
+    }
+
+    lastDist = dist;
+}, { passive: false });
+
+canvas.addEventListener("touchend", () => lastDist = null);
+
 render();
 </script>
 </body>

@@ -35,7 +35,7 @@ uniform vec2 iResolution;
 uniform vec2 center;
 uniform float zoom;
 
-vec3 mandelbrot(vec2 c, int maxIter) {
+int mandelbrot(vec2 c, int maxIter) {
     vec2 z = vec2(0.0);
     int i;
     for(i=0; i<maxIter; i++) {
@@ -44,8 +44,11 @@ vec3 mandelbrot(vec2 c, int maxIter) {
         z = vec2(x, y);
         if(dot(z,z) > 4.0) break;
     }
-    float t = float(i)/float(maxIter);
-    return vec3(t, t*t, t*t*t);
+    return i;
+}
+
+vec3 palette(float t) {
+    return 0.5 + 0.5*cos(6.2831*(vec3(0.0, 0.15, 0.33) + t));
 }
 
 void main() {
@@ -54,9 +57,9 @@ void main() {
     uv = center + uv / zoom;
 
     int maxIter = int(200.0 + 300.0*log2(zoom));
-    vec3 base = mandelbrot(uv, maxIter);
-    float t = length(base);  // reuse your escape ratio
-    vec3 color = 0.5 + 0.5*cos(6.2831*(vec3(0.0, 0.33, 0.67) + t));
+    int iter = mandelbrot(uv, maxIter);
+    float t = float(iter) / float(maxIter);
+    vec3 color = palette(t);
     FragColor = vec4(color, 1.0);
 }`;
 

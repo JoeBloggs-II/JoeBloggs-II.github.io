@@ -54,7 +54,9 @@ void main() {
     uv = center + uv / zoom;
 
     int maxIter = int(200.0 + 300.0*log2(zoom));
-    vec3 color = mandelbrot(uv, maxIter);
+    vec3 base = mandelbrot(uv, maxIter);
+    float t = length(base);  // reuse your escape ratio
+    vec3 color = 0.5 + 0.5*cos(6.2831*(vec3(0.0, 0.33, 0.67) + t));
     FragColor = vec4(color, 1.0);
 }`;
 

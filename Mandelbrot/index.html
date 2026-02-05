@@ -30,110 +30,7 @@ void main() { gl_Position = vec4(a_position, 0.0, 1.0); }`;
 
 const fragmentShaderSource = `#version 300 es
 precision highp float;
-out vec4 FragColor;
-uniform vec2 iResolution;
-uniform vec2 center;
-uniform float zoom;
 
-int mandelbrot(vec2 c, int maxIter) {
-    vec2 z = vec2(0.0);
-    int i;
-    for(i=0; i<maxIter; i++) {
-        float x = (z.x*z.x - z.y*z.y) + c.x;
-        float y = (2.0*z.x*z.y) + c.y;
-        z = vec2(x, y);
-        if(dot(z,z) > 4.0) break;
-    }
-    return i;
-}
-
-vec3 palette(float t) {
-    // Classic smooth Mandelbrot palette
-    // Black interior, blue outer glow, soft highlights
-    vec3 col;
-    
-    // Clamp for safety
-    t = clamp(t, 0.0, 1.0);
-const fragmentShaderSource = `#version 300 es
-precision highp float;
-out vec4 FragColor;
-uniform vec2 iResolution;
-uniform vec2 center;
-uniform float zoom;
-
-int mandelbrot(vec2 c, int maxIter) {
-    vec2 z = vec2(0.0);
-    int i;
-    for(i=0; i<maxIter; i++) {
-        float x = (z.x*z.x - z.y*z.y) + c.x;
-        float y = (2.0*z.x*z.y) + c.y;
-        z = vec2(x, y);
-        if(dot(z,z) > 4.0) break;
-    }
-    return i;
-}
-
-vec3 palette(float t) {
-    // Classic smooth Mandelbrot palette
-    // Black interior, blue outer glow, soft highlights
-    vec3 col;
-    
-    // Clamp for safety
-    t = clamp(t, 0.0, 1.0);
-const fragmentShaderSource = `#version 300 es
-precision highp float;
-out vec4 FragColor;
-uniform vec2 iResolution;
-uniform vec2 center;
-uniform float zoom;
-
-int mandelbrot(vec2 c, int maxIter) {
-    vec2 z = vec2(0.0);
-    int i;
-    for(i=0; i<maxIter; i++) {
-        float x = (z.x*z.x - z.y*z.y) + c.x;
-        float y = (2.0*z.x*z.y) + c.y;
-        z = vec2(x, y);
-        if(dot(z,z) > 4.0) break;
-    }
-    return i;
-}
-
-vec3 palette(float t) {
-    // Classic smooth Mandelbrot palette
-    // Black interior, blue outer glow, soft highlights
-    vec3 col;
-    
-    // Clamp for safety
-    t = clamp(t, 0.0, 1.0);
-const fragmentShaderSource = `#version 300 es
-precision highp float;
-out vec4 FragColor;
-uniform vec2 iResolution;
-uniform vec2 center;
-uniform float zoom;
-
-int mandelbrot(vec2 c, int maxIter) {
-    vec2 z = vec2(0.0);
-    int i;
-    for(i=0; i<maxIter; i++) {
-        float x = (z.x*z.x - z.y*z.y) + c.x;
-        float y = (2.0*z.x*z.y) + c.y;
-        z = vec2(x, y);
-        if(dot(z,z) > 4.0) break;
-    }
-    return i;
-}
-
-vec3 palette(float t) {
-    // Classic smooth Mandelbrot palette
-    // Black interior, blue outer glow, soft highlights
-    vec3 col;
-    
-    // Clamp for safety
-    t = clamp(t, 0.0, 1.0);
-const fragmentShaderSource = `#version 300 es
-precision highp float;
 out vec4 FragColor;
 
 uniform vec2 iResolution;
@@ -169,12 +66,10 @@ df df_mul(df a, df b) {
 }
 
 float df_len2(df x, df y) {
-    float hx = x.hi;
-    float hy = y.hi;
-    return hx*hx + hy*hy;
+    return x.hi*x.hi + y.hi*y.hi;
 }
 
-/* ===== Mandelbrot ===== */
+/* ===== Mandelbrot (double-float) ===== */
 
 int mandelbrot_df(df cx, df cy, int maxIter) {
     df zx = df_make(0.0);
@@ -214,14 +109,12 @@ void main() {
     uv.x *= iResolution.x / iResolution.y;
 
     int maxIter = int(200.0 + 300.0 * log2(zoom));
-
-    // Threshold where float precision breaks down
     bool highPrecision = zoom > 1e6;
 
     int iter;
 
     if (!highPrecision) {
-        // Fast path (float)
+        // Fast float path
         vec2 c = center + uv / zoom;
         vec2 z = vec2(0.0);
 
@@ -245,7 +138,6 @@ void main() {
     float t = float(iter) / float(maxIter);
     FragColor = vec4(palette(t), 1.0);
 }`;
-
 // Compile
 function compileShader(gl, type, source) {
     const shader = gl.createShader(type);

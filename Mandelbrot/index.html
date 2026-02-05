@@ -54,25 +54,196 @@ vec3 palette(float t) {
     
     // Clamp for safety
     t = clamp(t, 0.0, 1.0);
+const fragmentShaderSource = `#version 300 es
+precision highp float;
+out vec4 FragColor;
+uniform vec2 iResolution;
+uniform vec2 center;
+uniform float zoom;
 
-    // Polynomial palette (very common in classic renderers)
-    col.r = 9.0 * (1.0 - t) * t * t * t;
-    col.g = 15.0 * (1.0 - t) * (1.0 - t) * t * t;
-    col.b = 8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t;
-
-    return col;
+int mandelbrot(vec2 c, int maxIter) {
+    vec2 z = vec2(0.0);
+    int i;
+    for(i=0; i<maxIter; i++) {
+        float x = (z.x*z.x - z.y*z.y) + c.x;
+        float y = (2.0*z.x*z.y) + c.y;
+        z = vec2(x, y);
+        if(dot(z,z) > 4.0) break;
+    }
+    return i;
 }
+
+vec3 palette(float t) {
+    // Classic smooth Mandelbrot palette
+    // Black interior, blue outer glow, soft highlights
+    vec3 col;
+    
+    // Clamp for safety
+    t = clamp(t, 0.0, 1.0);
+const fragmentShaderSource = `#version 300 es
+precision highp float;
+out vec4 FragColor;
+uniform vec2 iResolution;
+uniform vec2 center;
+uniform float zoom;
+
+int mandelbrot(vec2 c, int maxIter) {
+    vec2 z = vec2(0.0);
+    int i;
+    for(i=0; i<maxIter; i++) {
+        float x = (z.x*z.x - z.y*z.y) + c.x;
+        float y = (2.0*z.x*z.y) + c.y;
+        z = vec2(x, y);
+        if(dot(z,z) > 4.0) break;
+    }
+    return i;
+}
+
+vec3 palette(float t) {
+    // Classic smooth Mandelbrot palette
+    // Black interior, blue outer glow, soft highlights
+    vec3 col;
+    
+    // Clamp for safety
+    t = clamp(t, 0.0, 1.0);
+const fragmentShaderSource = `#version 300 es
+precision highp float;
+out vec4 FragColor;
+uniform vec2 iResolution;
+uniform vec2 center;
+uniform float zoom;
+
+int mandelbrot(vec2 c, int maxIter) {
+    vec2 z = vec2(0.0);
+    int i;
+    for(i=0; i<maxIter; i++) {
+        float x = (z.x*z.x - z.y*z.y) + c.x;
+        float y = (2.0*z.x*z.y) + c.y;
+        z = vec2(x, y);
+        if(dot(z,z) > 4.0) break;
+    }
+    return i;
+}
+
+vec3 palette(float t) {
+    // Classic smooth Mandelbrot palette
+    // Black interior, blue outer glow, soft highlights
+    vec3 col;
+    
+    // Clamp for safety
+    t = clamp(t, 0.0, 1.0);
+const fragmentShaderSource = `#version 300 es
+precision highp float;
+out vec4 FragColor;
+
+uniform vec2 iResolution;
+uniform vec2 center;
+uniform float zoom;
+
+/* ===== Double-float support ===== */
+
+struct df {
+    float hi;
+    float lo;
+};
+
+df df_make(float x) {
+    return df(x, 0.0);
+}
+
+df df_add(df a, df b) {
+    float s = a.hi + b.hi;
+    float v = s - a.hi;
+    float t = ((b.hi - v) + (a.hi - (s - v))) + a.lo + b.lo;
+    return df(s, t);
+}
+
+df df_sub(df a, df b) {
+    return df_add(a, df(-b.hi, -b.lo));
+}
+
+df df_mul(df a, df b) {
+    float p = a.hi * b.hi;
+    float e = a.hi * b.lo + a.lo * b.hi;
+    return df(p, e);
+}
+
+float df_len2(df x, df y) {
+    float hx = x.hi;
+    float hy = y.hi;
+    return hx*hx + hy*hy;
+}
+
+/* ===== Mandelbrot ===== */
+
+int mandelbrot_df(df cx, df cy, int maxIter) {
+    df zx = df_make(0.0);
+    df zy = df_make(0.0);
+
+    int i;
+    for (i = 0; i < maxIter; i++) {
+        df zx2 = df_mul(zx, zx);
+        df zy2 = df_mul(zy, zy);
+
+        df x = df_add(df_sub(zx2, zy2), cx);
+        df y = df_add(df_mul(df_make(2.0), df_mul(zx, zy)), cy);
+
+        zx = x;
+        zy = y;
+
+        if (df_len2(zx, zy) > 4.0) break;
+    }
+    return i;
+}
+
+/* ===== Palette ===== */
+
+vec3 palette(float t) {
+    t = clamp(t, 0.0, 1.0);
+    return vec3(
+        9.0*(1.0-t)*t*t*t,
+        15.0*(1.0-t)*(1.0-t)*t*t,
+        8.5*(1.0-t)*(1.0-t)*(1.0-t)*t
+    );
+}
+
+/* ===== Main ===== */
 
 void main() {
     vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5);
     uv.x *= iResolution.x / iResolution.y;
-    uv = center + uv / zoom;
 
-    int maxIter = int(200.0 + 300.0*log2(zoom));
-    int iter = mandelbrot(uv, maxIter);
+    int maxIter = int(200.0 + 300.0 * log2(zoom));
+
+    // Threshold where float precision breaks down
+    bool highPrecision = zoom > 1e6;
+
+    int iter;
+
+    if (!highPrecision) {
+        // Fast path (float)
+        vec2 c = center + uv / zoom;
+        vec2 z = vec2(0.0);
+
+        int i;
+        for (i = 0; i < maxIter; i++) {
+            z = vec2(
+                z.x*z.x - z.y*z.y,
+                2.0*z.x*z.y
+            ) + c;
+
+            if (dot(z, z) > 4.0) break;
+        }
+        iter = i;
+    } else {
+        // High-precision path
+        df cx = df_add(df_make(center.x), df_make(uv.x / zoom));
+        df cy = df_add(df_make(center.y), df_make(uv.y / zoom));
+        iter = mandelbrot_df(cx, cy, maxIter);
+    }
+
     float t = float(iter) / float(maxIter);
-    vec3 color = palette(t);
-    FragColor = vec4(color, 1.0);
+    FragColor = vec4(palette(t), 1.0);
 }`;
 
 // Compile

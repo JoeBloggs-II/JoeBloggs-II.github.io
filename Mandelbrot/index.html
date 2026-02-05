@@ -31,51 +31,47 @@ void main() { gl_Position = vec4(a_position, 0.0, 1.0); }`;
 const fragmentShaderSource = `#version 300 es
 precision highp float;
 out vec4 FragColor;
+
 uniform vec2 iResolution;
-uniform vec2 center;
+uniform vec2 centerOffset; // small delta from center
 uniform float zoom;
 
 int mandelbrot(vec2 c, int maxIter) {
     vec2 z = vec2(0.0);
     int i;
     for(i=0; i<maxIter; i++) {
-        float x = (z.x*z.x - z.y*z.y) + c.x;
-        float y = (2.0*z.x*z.y) + c.y;
-        z = vec2(x, y);
+        z = vec2(
+            z.x*z.x - z.y*z.y + c.x,
+            2.0*z.x*z.y + c.y
+        );
         if(dot(z,z) > 4.0) break;
     }
     return i;
 }
 
 vec3 palette(float t) {
-    // Classic smooth Mandelbrot palette
-    // Black interior, blue outer glow, soft highlights
-    vec3 col;
-    
-    // Clamp for safety
     t = clamp(t, 0.0, 1.0);
-
-    // Polynomial palette (very common in classic renderers)
+    vec3 col;
     col.r = 9.0 * (1.0 - t) * t * t * t;
     col.g = 15.0 * (1.0 - t) * (1.0 - t) * t * t;
     col.b = 8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t;
-
     return col;
 }
 
 void main() {
+    // Map pixel to [-2..1] x [-1.5..1.5]
     vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5);
     uv.x *= iResolution.x / iResolution.y;
-    uv = center + uv / zoom;
+
+    // Apply zoom
+    vec2 c = uv / zoom + centerOffset;
 
     int maxIter = int(200.0 + 300.0*log2(zoom));
-    int iter = mandelbrot(uv, maxIter);
+    int iter = mandelbrot(c, maxIter);
     float t = float(iter) / float(maxIter);
-    vec3 color = palette(t);
-    FragColor = vec4(color, 1.0);
+    FragColor = vec4(palette(t), 1.0);
 }`;
 
-// Compile
 function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -105,7 +101,7 @@ gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
 // Uniforms
 const resLoc = gl.getUniformLocation(program, "iResolution");
-const centerLoc = gl.getUniformLocation(program, "center");
+const centerOffsetLoc = gl.getUniformLocation(program, "centerOffset");
 const zoomLoc = gl.getUniformLocation(program, "zoom");
 
 /* ===== Coordinate helper ===== */
@@ -156,7 +152,7 @@ canvas.addEventListener('mousemove', e => {
     }
 });
 
-/* ===== Mouse zoom (fixed) ===== */
+/* ===== Mouse zoom ===== */
 
 canvas.addEventListener('wheel', e => {
     e.preventDefault();
@@ -170,7 +166,6 @@ let lastTouchDist = null;
 
 canvas.addEventListener('touchmove', e => {
     e.preventDefault();
-
     if(e.touches.length === 1) {
         const t = e.touches[0];
         const dx = (t.clientX - lastX)/canvas.width*3.0/zoom;
@@ -180,23 +175,15 @@ canvas.addEventListener('touchmove', e => {
         lastX = t.clientX;
         lastY = t.clientY;
     }
-
     if(e.touches.length === 2) {
-        const t1 = e.touches[0];
-        const t2 = e.touches[1];
-
-        const dx = t1.clientX - t2.clientX;
-        const dy = t1.clientY - t2.clientY;
-        const dist = Math.hypot(dx, dy);
-
-        const midX = (t1.clientX + t2.clientX)/2;
-        const midY = (t1.clientY + t2.clientY)/2;
-
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const dist = Math.hypot(t1.clientX-t2.clientX, t1.clientY-t2.clientY);
+        const midX = (t1.clientX+t2.clientX)/2;
+        const midY = (t1.clientY+t2.clientY)/2;
         if(lastTouchDist !== null) {
             const factor = dist / lastTouchDist;
             zoomAt(midX, midY, factor);
         }
-
         lastTouchDist = dist;
     }
 }, { passive:false });
@@ -207,15 +194,17 @@ canvas.addEventListener('touchstart', e => {
         lastY = e.touches[0].clientY;
     }
 });
-
 canvas.addEventListener('touchend', () => lastTouchDist = null);
 
 /* ===== Render ===== */
 
 function render() {
     gl.uniform2f(resLoc, canvas.width, canvas.height);
-    gl.uniform2f(centerLoc, center.x, center.y);
+
+    // Compute high-precision centerOffset in JS (delta from center to screen)
+    gl.uniform2f(centerOffsetLoc, center.x, center.y);
     gl.uniform1f(zoomLoc, zoom);
+
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     requestAnimationFrame(render);
 }

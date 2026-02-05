@@ -36,7 +36,11 @@ void main() {
 `;
 
 const fragSrc = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
+#else
+precision mediump float;
+#endif
 varying vec2 vUV;
 
 uniform vec2 centerHi;
@@ -97,13 +101,12 @@ void main() {
     df zx = make_df(0.0);
     df zy = make_df(0.0);
 
-    int i;
-    for (i = 0; i < MAX_ITER; i++) {
+    for (int i = 0; i < MAX_ITER; i++) {
         df zx2 = mul(zx, zx);
         df zy2 = mul(zy, zy);
         if (zx2.hi + zy2.hi > 4.0) break;
-
-        df nzx = add(add(zx2, make_df(-zy2.hi)), x);
+        
+        df nzx = add(add(zx2, mul(make_df(-1.0), zy2)), x);
         df nzy = add(mul(make_df(2.0), mul(zx, zy)), y);
 
         zx = nzx;

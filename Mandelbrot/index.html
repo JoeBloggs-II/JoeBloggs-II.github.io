@@ -1,11 +1,17 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Mandelbrot Deep Zoom (Split Float)</title>
+<title>Mandelbrot – Stable Baseline</title>
 <style>
-html, body { margin: 0; height: 100%; background: black; }
-canvas { width: 100%; height: 100%; display: block; }
+html, body {
+    margin: 0;
+    background: black;
+    overflow: hidden;
+}
+canvas {
+    display: block;
+}
 </style>
 </head>
 <body>
@@ -14,28 +20,38 @@ canvas { width: 100%; height: 100%; display: block; }
 <script>
 const canvas = document.getElementById("c");
 const gl = canvas.getContext("webgl");
-if (!gl) alert("WebGL not supported");
 
-// Resize
+if (!gl) {
+    alert("WebGL not supported");
+}
+
+/* ---------- Resize ---------- */
+
 function resize() {
-    canvas.width = innerWidth;
-    canvas.height = innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = innerWidth  * dpr;
+    canvas.height = innerHeight * dpr;
+    canvas.style.width  = innerWidth + "px";
+    canvas.style.height = innerHeight + "px";
     gl.viewport(0, 0, canvas.width, canvas.height);
 }
 addEventListener("resize", resize);
 resize();
 
-// ---------- SHADERS ----------
-const vertSrc = `
+/* ---------- Shaders ---------- */
+
+const vs = `
 attribute vec2 pos;
 varying vec2 vUV;
+
 void main() {
     vUV = pos;
     gl_Position = vec4(pos, 0.0, 1.0);
 }
 `;
 
-const fragSrc = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+const fs = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
 precision mediump float;
@@ -43,110 +59,92 @@ precision mediump float;
 
 varying vec2 vUV;
 
-uniform vec2 centerHi;
-uniform vec2 centerLo;
-uniform float zoom;
 uniform vec2 resolution;
-
-#define MAX_ITER 300
-
-struct df { float hi; float lo; };
-
-df make_df(float x) { return df(x, 0.0); }
-
-df add(df a, df b) {
-    float s = a.hi + b.hi;
-    float v = s - a.hi;
-    float t = ((b.hi - v) + (a.hi - (s - v))) + a.lo + b.lo;
-    return df(s + t, t - ((s + t) - s));
-}
-
-df mul(df a, df b) {
-    float p = a.hi * b.hi;
-    float e = a.hi * b.lo + a.lo * b.hi;
-    return df(p + e, e - ((p + e) - p));
-}
+uniform vec2 center;
+uniform float zoom;
 
 void main() {
     vec2 uv = vUV;
     uv.x *= resolution.x / resolution.y;
 
-    df cx = add(make_df(centerHi.x), make_df(centerLo.x));
-    df cy = add(make_df(centerHi.y), make_df(centerLo.y));
+    vec2 c = center + uv / zoom;
+    vec2 z = vec2(0.0);
 
-    float scale = 1.0 / zoom;
+    int iter;
+    const int MAX = 200;
 
-    df x = add(cx, make_df(uv.x * scale));
-    df y = add(cy, make_df(uv.y * scale));
+    for (int i = 0; i < MAX; i++) {
+        z = vec2(
+            z.x*z.x - z.y*z.y,
+            2.0*z.x*z.y
+        ) + c;
 
-    df zx = make_df(0.0);
-    df zy = make_df(0.0);
-
-    int iter = 0;
-    for (int i = 0; i < MAX_ITER; i++) {
-        df zx2 = mul(zx, zx);
-        df zy2 = mul(zy, zy);
-        if (zx2.hi + zy2.hi > 4.0) break;
-
-        df nzx = add(add(zx2, mul(make_df(-1.0), zy2)), x);
-        df nzy = add(mul(make_df(2.0), mul(zx, zy)), y);
-
-        zx = nzx;
-        zy = nzy;
-        iter = i;
+        if (dot(z, z) > 4.0) {
+            iter = i;
+            break;
+        }
+        iter = MAX;
     }
 
-    float t = float(iter) / float(MAX_ITER);
-    gl_FragColor = vec4(t, t*t, 1.0 - t, 1.0);
-}`;
+    float t = float(iter) / float(MAX);
+    vec3 col = vec3(
+        0.5 + 0.5*cos(3.0 + t*6.0),
+        0.5 + 0.5*cos(1.0 + t*6.0),
+        0.5 + 0.5*cos(5.0 + t*6.0)
+    );
 
-// ---------- PROGRAM ----------
+    gl_FragColor = vec4(col, 1.0);
+}
+`;
+
 function compile(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
         console.error(gl.getShaderInfoLog(s));
+    }
     return s;
 }
 
 const prog = gl.createProgram();
-gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
-gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
 gl.linkProgram(prog);
 gl.useProgram(prog);
 
-// ---------- GEOMETRY ----------
+/* ---------- Geometry ---------- */
+
 const buf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-    -1,-1,  1,-1,  -1,1,
-    -1,1,   1,-1,   1,1
-]), gl.STATIC_DRAW);
+gl.bufferData(
+    gl.ARRAY_BUFFER,
+    new Float32Array([
+        -1,-1,  1,-1, -1, 1,
+        -1, 1,  1,-1,  1, 1
+    ]),
+    gl.STATIC_DRAW
+);
 
 const posLoc = gl.getAttribLocation(prog, "pos");
 gl.enableVertexAttribArray(posLoc);
 gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-// ---------- UNIFORMS ----------
-const centerHiLoc = gl.getUniformLocation(prog, "centerHi");
-const centerLoLoc = gl.getUniformLocation(prog, "centerLo");
-const zoomLoc     = gl.getUniformLocation(prog, "zoom");
-const resLoc      = gl.getUniformLocation(prog, "resolution");
+/* ---------- Uniforms ---------- */
 
-// ---------- STATE ----------
-let centerX = -0.5;
-let centerY = 0.0;
+const resLoc    = gl.getUniformLocation(prog, "resolution");
+const centerLoc = gl.getUniformLocation(prog, "center");
+const zoomLoc   = gl.getUniformLocation(prog, "zoom");
+
+/* ---------- State ---------- */
+
+let center = { x: -0.5, y: 0.0 };
 let zoom = 1.0;
 
-function split(x) {
-    const hi = Math.fround(x);
-    return [hi, x - hi];
-}
+/* ---------- Mouse ---------- */
 
-// ---------- INPUT ----------
 let dragging = false;
-let lastX, lastY;
+let lastX = 0, lastY = 0;
 
 canvas.onmousedown = e => {
     dragging = true;
@@ -158,32 +156,25 @@ canvas.onmouseup = () => dragging = false;
 
 canvas.onmousemove = e => {
     if (!dragging) return;
-    const dx = e.clientX - lastX;
-    const dy = e.clientY - lastY;
+    const dx = (e.clientX - lastX) / canvas.width * 2.0 / zoom;
+    const dy = (e.clientY - lastY) / canvas.height * 2.0 / zoom;
+    center.x -= dx * (canvas.width / canvas.height);
+    center.y += dy;
     lastX = e.clientX;
     lastY = e.clientY;
-
-    const scale = 1.0 / zoom;
-    centerX -= dx * scale * 0.002;
-    centerY += dy * scale * 0.002;
 };
 
 canvas.onwheel = e => {
     e.preventDefault();
-    const z = Math.exp(-e.deltaY * 0.001);
-    zoom *= z;
+    zoom *= e.deltaY < 0 ? 1.2 : 0.8;
 };
 
-// ---------- RENDER LOOP ----------
+/* ---------- Render ---------- */
+
 function draw() {
-    const [cxh, cxl] = split(centerX);
-    const [cyh, cyl] = split(centerY);
-
-    gl.uniform2f(centerHiLoc, cxh, cyh);
-    gl.uniform2f(centerLoLoc, cxl, cyl);
-    gl.uniform1f(zoomLoc, zoom);
     gl.uniform2f(resLoc, canvas.width, canvas.height);
-
+    gl.uniform2f(centerLoc, center.x, center.y);
+    gl.uniform1f(zoomLoc, zoom);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     requestAnimationFrame(draw);
 }

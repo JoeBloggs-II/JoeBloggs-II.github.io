@@ -2,10 +2,24 @@
 <html>
 <body style="margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh; overflow:hidden;">
 <canvas id="canvas"></canvas>
+<div id="zoomDisplay" style="
+    position:absolute;
+    top:10px;
+    left:10px;
+    color:white;
+    font-family:sans-serif;
+    font-size:16px;
+    background:rgba(0,0,0,0.5);
+    padding:4px 8px;
+    border-radius:4px;
+    z-index:10;
+"></div>
 <script>
 const canvas = document.getElementById("canvas");
 const gl = canvas.getContext("webgl2");
 
+const zoomDisplay = document.getElementById("zoomDisplay");
+   
 let center = {x:-0.5,y:0};
 let zoom = 1.0;
 
@@ -190,6 +204,9 @@ function render(){
     gl.uniform2f(centerLoc,center.x,center.y);
     gl.uniform1f(zoomLoc,zoom);
     gl.drawArrays(gl.TRIANGLES,0,6);
+
+    zoomDisplay.textContent = "Zoom: " + zoom.toExponential(3);
+
     requestAnimationFrame(render);
 }
 render();

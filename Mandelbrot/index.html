@@ -1,47 +1,43 @@
 <!DOCTYPE html>
 <html lang="en">
-<body style="margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh; overflow:hidden;">
+<body style="margin:0; background:black; overflow:hidden;">
 <canvas id="canvas"></canvas>
 
 <script>
 const canvas = document.getElementById("canvas");
 const gl = canvas.getContext("webgl2");
 
-if (!gl) {
-    alert("WebGL2 not supported");
-}
+if (!gl) alert("WebGL2 not supported");
 
-/* ===== State ===== */
+/* ================= State ================= */
 
 let center = { x: -0.5, y: 0.0 };
 let zoom = 1.0;
 
-/* ===== Resize ===== */
+/* ================= Resize ================= */
 
-function resizeCanvas() {
+function resize() {
     const dpr = window.devicePixelRatio || 1;
-    const size = Math.min(window.innerWidth, window.innerHeight);
-    canvas.style.width = size + "px";
-    canvas.style.height = size + "px";
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
+    canvas.width  = innerWidth * dpr;
+    canvas.height = innerHeight * dpr;
+    canvas.style.width  = innerWidth + "px";
+    canvas.style.height = innerHeight + "px";
     gl.viewport(0, 0, canvas.width, canvas.height);
 }
-window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
+window.addEventListener("resize", resize);
+resize();
 
-/* ===== Shaders ===== */
+/* ================= Shaders ================= */
 
-const vertexShaderSource = `#version 300 es
+const vs = `#version 300 es
 in vec2 a_position;
 void main() {
     gl_Position = vec4(a_position, 0.0, 1.0);
 }
 `;
 
-const fragmentShaderSource = `#version 300 es
+const fs = `#version 300 es
 precision highp float;
-
 out vec4 FragColor;
 
 uniform vec2 iResolution;
@@ -49,62 +45,45 @@ uniform float zoom;
 uniform vec2 centerHi;
 uniform vec2 centerLo;
 
-/* ===== Double-float ===== */
+struct df { float hi; float lo; };
 
-struct df {
-    float hi;
-    float lo;
-};
+df df_make(float x){ return df(x,0.0); }
 
-df df_make(float x) { return df(x, 0.0); }
-
-df df_add(df a, df b) {
+df df_add(df a, df b){
     float s = a.hi + b.hi;
     float v = s - a.hi;
     float t = ((b.hi - v) + (a.hi - (s - v))) + a.lo + b.lo;
-    return df(s, t);
+    return df(s,t);
 }
 
-df df_sub(df a, df b) {
-    return df_add(a, df(-b.hi, -b.lo));
-}
+df df_sub(df a, df b){ return df_add(a, df(-b.hi, -b.lo)); }
 
-df df_mul(df a, df b) {
+df df_mul(df a, df b){
     float p = a.hi * b.hi;
-    float e = a.hi * b.lo + a.lo * b.hi;
-    return df(p, e);
+    float e = a.hi*b.lo + a.lo*b.hi;
+    return df(p,e);
 }
 
-float df_len2(df x, df y) {
-    return x.hi * x.hi + y.hi * y.hi;
+float df_len2(df x, df y){
+    return x.hi*x.hi + y.hi*y.hi;
 }
 
-/* ===== Mandelbrot (double-float) ===== */
-
-int mandelbrot_df(df cx, df cy, int maxIter) {
+int mandel_df(df cx, df cy, int maxIter){
     df zx = df_make(0.0);
     df zy = df_make(0.0);
-
     int i;
-    for (i = 0; i < maxIter; i++) {
-        df zx2 = df_mul(zx, zx);
-        df zy2 = df_mul(zy, zy);
-
-        df x = df_add(df_sub(zx2, zy2), cx);
-        df y = df_add(df_mul(df_make(2.0), df_mul(zx, zy)), cy);
-
-        zx = x;
-        zy = y;
-
-        if (df_len2(zx, zy) > 4.0) break;
+    for(i=0;i<maxIter;i++){
+        df zx2 = df_mul(zx,zx);
+        df zy2 = df_mul(zy,zy);
+        zx = df_add(df_sub(zx2,zy2),cx);
+        zy = df_add(df_mul(df_make(2.0),df_mul(zx,zy)),cy);
+        if(df_len2(zx,zy) > 4.0) break;
     }
     return i;
 }
 
-/* ===== Palette ===== */
-
-vec3 palette(float t) {
-    t = clamp(t, 0.0, 1.0);
+vec3 palette(float t){
+    t = clamp(t,0.0,1.0);
     return vec3(
         9.0*(1.0-t)*t*t*t,
         15.0*(1.0-t)*(1.0-t)*t*t,
@@ -112,64 +91,54 @@ vec3 palette(float t) {
     );
 }
 
-/* ===== Main ===== */
-
-void main() {
-    vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0, 1.5);
+void main(){
+    vec2 uv = (gl_FragCoord.xy / iResolution) * 3.0 - vec2(2.0,1.5);
     uv.x *= iResolution.x / iResolution.y;
 
-    int maxIter = int(200.0 + 300.0 * log2(zoom));
-    bool highPrecision = zoom > 1e6;
-
+    int maxIter = int(200.0 + 300.0*log2(zoom));
+    bool hiPrec = zoom > 1e6;
     int iter;
 
-    if (!highPrecision) {
-        // Fast float path
-        vec2 c = vec2(centerHi.x, centerHi.y) + uv / zoom;
+    if(!hiPrec){
+        vec2 c = centerHi + uv/zoom;
         vec2 z = vec2(0.0);
-
         int i;
-        for (i = 0; i < maxIter; i++) {
-            z = vec2(
-                z.x*z.x - z.y*z.y,
-                2.0*z.x*z.y
-            ) + c;
-
-            if (dot(z, z) > 4.0) break;
+        for(i=0;i<maxIter;i++){
+            z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+            if(dot(z,z) > 4.0) break;
         }
         iter = i;
     } else {
-        // High-precision path
-        df cx = df_add(df(centerHi.x, centerLo.x), df_make(uv.x / zoom));
-        df cy = df_add(df(centerHi.y, centerLo.y), df_make(uv.y / zoom));
-        iter = mandelbrot_df(cx, cy, maxIter);
+        df cx = df_add(df(centerHi.x,centerLo.x), df_make(uv.x/zoom));
+        df cy = df_add(df(centerHi.y,centerLo.y), df_make(uv.y/zoom));
+        iter = mandel_df(cx,cy,maxIter);
     }
 
-    float t = float(iter) / float(maxIter);
-    FragColor = vec4(palette(t), 1.0);
+    FragColor = vec4(palette(float(iter)/float(maxIter)),1.0);
 }
 `;
 
-/* ===== Compile helpers ===== */
+/* ================= Compile ================= */
 
-function compileShader(type, source) {
+function compile(type, src){
     const s = gl.createShader(type);
-    gl.shaderSource(s, source);
+    gl.shaderSource(s,src);
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(s));
-        throw new Error("Shader compile failed");
-    }
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))
+        throw gl.getShaderInfoLog(s);
     return s;
 }
 
-const program = gl.createProgram();
-gl.attachShader(program, compileShader(gl.VERTEX_SHADER, vertexShaderSource));
-gl.attachShader(program, compileShader(gl.FRAGMENT_SHADER, fragmentShaderSource));
-gl.linkProgram(program);
-gl.useProgram(program);
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER,vs));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER,fs));
+gl.linkProgram(prog);
+gl.useProgram(prog);
 
-/* ===== Geometry ===== */
+/* ================= VAO (THE FIX) ================= */
+
+const vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
 
 const quad = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -178,88 +147,57 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
     -1, 1,  1,-1,  1, 1
 ]), gl.STATIC_DRAW);
 
-const posLoc = gl.getAttribLocation(program, "a_position");
+const posLoc = gl.getAttribLocation(prog,"a_position");
 gl.enableVertexAttribArray(posLoc);
-gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+gl.vertexAttribPointer(posLoc,2,gl.FLOAT,false,0,0);
 
-/* ===== Uniforms ===== */
+/* ================= Uniforms ================= */
 
-const resLoc = gl.getUniformLocation(program, "iResolution");
-const zoomLoc = gl.getUniformLocation(program, "zoom");
-const centerHiLoc = gl.getUniformLocation(program, "centerHi");
-const centerLoLoc = gl.getUniformLocation(program, "centerLo");
+const resLoc = gl.getUniformLocation(prog,"iResolution");
+const zoomLoc = gl.getUniformLocation(prog,"zoom");
+const hiLoc   = gl.getUniformLocation(prog,"centerHi");
+const loLoc   = gl.getUniformLocation(prog,"centerLo");
 
-/* ===== Precision split ===== */
+/* ================= Precision split ================= */
 
-function splitFloat64(x) {
+function split(x){
     const hi = Math.fround(x);
-    return { hi, lo: x - hi };
+    return { hi, lo: x-hi };
 }
 
-/* ===== Interaction ===== */
+/* ================= Interaction ================= */
 
-function screenToComplex(px, py) {
-    const r = canvas.getBoundingClientRect();
-    let x = (px - r.left) / r.width;
-    let y = (py - r.top) / r.height;
-
-    let u = x * 3.0 - 2.0;
-    let v = y * 3.0 - 1.5;
-    u *= canvas.width / canvas.height;
-
-    return {
-        x: center.x + u / zoom,
-        y: center.y + v / zoom
-    };
-}
-
-function zoomAt(px, py, factor) {
-    const before = screenToComplex(px, py);
-    zoom *= factor;
-    const after = screenToComplex(px, py);
-    center.x += before.x - after.x;
-    center.y += before.y - after.y;
-}
-
-let dragging = false, lastX, lastY;
-
-canvas.addEventListener("mousedown", e => {
-    dragging = true;
-    lastX = e.clientX;
-    lastY = e.clientY;
-});
-window.addEventListener("mouseup", () => dragging = false);
-
-canvas.addEventListener("mousemove", e => {
-    if (!dragging) return;
-    const dx = (e.clientX - lastX) / canvas.width * 3.0 / zoom;
-    const dy = (e.clientY - lastY) / canvas.height * 3.0 / zoom;
-    center.x -= dx * (canvas.width / canvas.height);
-    center.y += dy;
-    lastX = e.clientX;
-    lastY = e.clientY;
-});
-
-canvas.addEventListener("wheel", e => {
+canvas.onwheel = e => {
     e.preventDefault();
-    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.2 : 0.8);
-}, { passive:false });
+    zoom *= e.deltaY < 0 ? 1.2 : 0.8;
+};
 
-/* ===== Render ===== */
+let drag=false, px, py;
+canvas.onmousedown=e=>{ drag=true; px=e.clientX; py=e.clientY; };
+onmouseup=()=>drag=false;
+onmousemove=e=>{
+    if(!drag) return;
+    center.x -= (e.clientX-px)/canvas.width*3.0/zoom;
+    center.y += (e.clientY-py)/canvas.height*3.0/zoom;
+    px=e.clientX; py=e.clientY;
+};
 
-function render() {
-    const cx = splitFloat64(center.x);
-    const cy = splitFloat64(center.y);
+/* ================= Render ================= */
 
-    gl.uniform2f(resLoc, canvas.width, canvas.height);
-    gl.uniform1f(zoomLoc, zoom);
-    gl.uniform2f(centerHiLoc, cx.hi, cy.hi);
-    gl.uniform2f(centerLoLoc, cx.lo, cy.lo);
+function render(){
+    gl.bindVertexArray(vao);
 
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const cx = split(center.x);
+    const cy = split(center.y);
+
+    gl.uniform2f(resLoc,canvas.width,canvas.height);
+    gl.uniform1f(zoomLoc,zoom);
+    gl.uniform2f(hiLoc,cx.hi,cy.hi);
+    gl.uniform2f(loLoc,cx.lo,cy.lo);
+
+    gl.drawArrays(gl.TRIANGLES,0,6);
     requestAnimationFrame(render);
 }
-
 render();
 </script>
 </body>

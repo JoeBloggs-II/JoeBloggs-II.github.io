@@ -48,7 +48,19 @@ int mandelbrot(vec2 c, int maxIter) {
 }
 
 vec3 palette(float t) {
-    return 0.5 + 0.5*cos(6.2831*(vec3(0.3, 0.6, 0.9) + t*2.0));
+    // Classic smooth Mandelbrot palette
+    // Black interior, blue outer glow, soft highlights
+    vec3 col;
+    
+    // Clamp for safety
+    t = clamp(t, 0.0, 1.0);
+
+    // Polynomial palette (very common in classic renderers)
+    col.r = 9.0 * (1.0 - t) * t * t * t;
+    col.g = 15.0 * (1.0 - t) * (1.0 - t) * t * t;
+    col.b = 8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t;
+
+    return col;
 }
 
 void main() {

@@ -35,12 +35,12 @@ void main() {
 }
 `;
 
-const fragSrc = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
+const fragSrc = `#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
 precision mediump float;
 #endif
+
 varying vec2 vUV;
 
 uniform vec2 centerHi;
@@ -48,51 +48,32 @@ uniform vec2 centerLo;
 uniform float zoom;
 uniform vec2 resolution;
 
-#define MAX_ITER 500
+#define MAX_ITER 300
 
-// double-float
 struct df { float hi; float lo; };
 
-df make_df(float x) {
-    df r;
-    r.hi = x;
-    r.lo = 0.0;
-    return r;
-}
+df make_df(float x) { return df(x, 0.0); }
 
 df add(df a, df b) {
     float s = a.hi + b.hi;
     float v = s - a.hi;
     float t = ((b.hi - v) + (a.hi - (s - v))) + a.lo + b.lo;
-    df r;
-    r.hi = s + t;
-    r.lo = t - (r.hi - s);
-    return r;
+    return df(s + t, t - ((s + t) - s));
 }
 
 df mul(df a, df b) {
     float p = a.hi * b.hi;
     float e = a.hi * b.lo + a.lo * b.hi;
-    df r;
-    r.hi = p + e;
-    r.lo = e - (r.hi - p);
-    return r;
-}
-
-float df_len2(df x, df y) {
-    return x.hi*x.hi + y.hi*y.hi;
+    return df(p + e, e - ((p + e) - p));
 }
 
 void main() {
-    // Correct aspect handling
     vec2 uv = vUV;
     uv.x *= resolution.x / resolution.y;
 
-    // Build high-precision center
     df cx = add(make_df(centerHi.x), make_df(centerLo.x));
     df cy = add(make_df(centerHi.y), make_df(centerLo.y));
 
-    // Pixel scale
     float scale = 1.0 / zoom;
 
     df x = add(cx, make_df(uv.x * scale));
@@ -101,23 +82,23 @@ void main() {
     df zx = make_df(0.0);
     df zy = make_df(0.0);
 
+    int iter = 0;
     for (int i = 0; i < MAX_ITER; i++) {
         df zx2 = mul(zx, zx);
         df zy2 = mul(zy, zy);
         if (zx2.hi + zy2.hi > 4.0) break;
-        
+
         df nzx = add(add(zx2, mul(make_df(-1.0), zy2)), x);
         df nzy = add(mul(make_df(2.0), mul(zx, zy)), y);
 
         zx = nzx;
         zy = nzy;
+        iter = i;
     }
 
-    float t = float(i) / float(MAX_ITER);
-    vec3 col = vec3(t*t, t, 1.0 - t);
-    gl_FragColor = vec4(col, 1.0);
-}
-`;
+    float t = float(iter) / float(MAX_ITER);
+    gl_FragColor = vec4(t, t*t, 1.0 - t, 1.0);
+}`;
 
 // ---------- PROGRAM ----------
 function compile(type, src) {

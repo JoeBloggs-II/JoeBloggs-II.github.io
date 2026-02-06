@@ -2,6 +2,16 @@
 <html>
 <body style="margin:0; background:black; overflow:hidden;">
 <canvas id="canvas"></canvas>
+<div id="errorDisplay" style="
+    position:absolute;
+    inset:10px 10px auto 10px;
+    color:white;
+    font-family:monospace;
+    background:rgba(128,0,0,0.7);
+    padding:6px 10px;
+    border-radius:4px;
+    display:none;
+"></div>
 <div id="zoomDisplay" style="
     position:absolute;
     top:10px;
@@ -17,19 +27,26 @@
 const canvas = document.getElementById("canvas");
 const gl = canvas.getContext("webgl2");
 const zoomDisplay = document.getElementById("zoomDisplay");
+const errorDisplay = document.getElementById("errorDisplay");
 
 let center = { x: -0.5, y: 0.0 };
 let zoom = 1.5;
+
+if (!gl) {
+    errorDisplay.style.display = "block";
+    errorDisplay.textContent = "WebGL2 not supported. Please use a WebGL2-capable browser.";
+    throw new Error("WebGL2 not supported.");
+}
 
 /* ===== Resize ===== */
 
 function resize() {
     const dpr = window.devicePixelRatio || 1;
     const size = Math.min(innerWidth, innerHeight);
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
-    canvas.style.width = size + "px";
-    canvas.style.height = size + "px";
+    canvas.width = Math.max(1, Math.floor(size * dpr));
+    canvas.height = Math.max(1, Math.floor(size * dpr));
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
     gl.viewport(0, 0, canvas.width, canvas.height);
 }
 addEventListener("resize", resize);
@@ -51,6 +68,7 @@ out vec4 FragColor;
 uniform vec2 iResolution;
 uniform vec4 center_df;   // x.hi, x.lo, y.hi, y.lo
 uniform float zoom;
+uniform bool useDouble;
 
 /* ===== double-float ===== */
 
@@ -83,7 +101,7 @@ float df_len2(df x, df y) {
 
 /* ===== Mandelbrot ===== */
 
-int mandelbrot(df cx, df cy, int maxIter) {
+int mandelbrot_df(df cx, df cy, int maxIter) {
     df zx = df_make(0.0);
     df zy = df_make(0.0);
 
@@ -99,6 +117,18 @@ int mandelbrot(df cx, df cy, int maxIter) {
         zy = y;
 
         if (df_len2(zx, zy) > 4.0) break;
+    }
+    return i;
+}
+
+int mandelbrot_f(vec2 c, int maxIter) {
+    vec2 z = vec2(0.0);
+    int i;
+    for (i = 0; i < maxIter; i++) {
+        float x = z.x * z.x - z.y * z.y + c.x;
+        float y = 2.0 * z.x * z.y + c.y;
+        z = vec2(x, y);
+        if (dot(z, z) > 4.0) break;
     }
     return i;
 }
@@ -126,17 +156,27 @@ void main() {
 
     float scale = 1.0 / zoom;
 
-    df cx = df_add(
-        df(center_df.x, center_df.y),
-        df_make(uv.x * scale)
-    );
-    df cy = df_add(
-        df(center_df.z, center_df.w),
-        df_make(uv.y * scale)
-    );
+    int maxIter = int(200.0 + 220.0 * log2(zoom));
+    maxIter = clamp(maxIter, 200, 1200);
+    int iter;
 
-    int maxIter = int(200.0 + 300.0 * log2(zoom));
-    int iter = mandelbrot(cx, cy, maxIter);
+    if (useDouble) {
+        df cx = df_add(
+            df(center_df.x, center_df.y),
+            df_make(uv.x * scale)
+        );
+        df cy = df_add(
+            df(center_df.z, center_df.w),
+            df_make(uv.y * scale)
+        );
+        iter = mandelbrot_df(cx, cy, maxIter);
+    } else {
+        vec2 c = vec2(
+            center_df.x + uv.x * scale,
+            center_df.z + uv.y * scale
+        );
+        iter = mandelbrot_f(c, maxIter);
+    }
 
     float t = float(iter) / float(maxIter);
     FragColor = vec4(palette(t), 1.0);
@@ -178,6 +218,7 @@ gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 const resLoc = gl.getUniformLocation(prog, "iResolution");
 const centerLoc = gl.getUniformLocation(prog, "center_df");
 const zoomLoc = gl.getUniformLocation(prog, "zoom");
+const useDoubleLoc = gl.getUniformLocation(prog, "useDouble");
 
 /* ===== Interaction ===== */
 
@@ -207,7 +248,7 @@ function zoomAt(x, y, f) {
 let drag = false, lx, ly;
 
 canvas.onmousedown = e => { drag = true; lx = e.clientX; ly = e.clientY; };
-onmouseup = () => drag = false;
+window.addEventListener("mouseup", () => { drag = false; });
 
 canvas.onmousemove = e => {
     if (!drag) return;
@@ -219,10 +260,11 @@ canvas.onmousemove = e => {
     ly = e.clientY;
 };
 
-canvas.onwheel = e => {
+canvas.addEventListener("wheel", e => {
     e.preventDefault();
-    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.2 : 0.8);
-};
+    const zoomFactor = e.deltaY < 0 ? 1.2 : 0.8;
+    zoomAt(e.clientX, e.clientY, zoomFactor);
+}, { passive: false });
 
 /* ===== Render ===== */
 
@@ -230,6 +272,7 @@ function render() {
     gl.uniform2f(resLoc, canvas.width, canvas.height);
     gl.uniform4f(centerLoc, center.x, 0.0, center.y, 0.0);
     gl.uniform1f(zoomLoc, zoom);
+    gl.uniform1i(useDoubleLoc, zoom > 1000.0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     zoomDisplay.textContent = "Zoom: " + zoom.toExponential(3);

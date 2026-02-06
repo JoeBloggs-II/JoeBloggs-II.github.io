@@ -12,17 +12,28 @@
     padding:4px 8px;
     border-radius:4px;
 "></div>
+<div id="errorDisplay" style="
+    position:absolute;
+    top:10px;
+    left:10px;
+    right:10px;
+    color:white;
+    font-family:monospace;
+    background:rgba(120,0,0,0.7);
+    padding:8px 12px;
+    border-radius:6px;
+    display:none;
+"></div>
 
 <script>
 const canvas = document.getElementById("canvas");
 const zoomDisplay = document.getElementById("zoomDisplay");
 const gl = canvas.getContext("webgl2");
+const errorDisplay = document.getElementById("errorDisplay");
 
 if (!gl) {
-    zoomDisplay.textContent = "WebGL2 is required to render the Mandelbrot set.";
-    zoomDisplay.style.background = "rgba(120,0,0,0.7)";
-    zoomDisplay.style.padding = "8px 12px";
-    zoomDisplay.style.borderRadius = "6px";
+    errorDisplay.textContent = "WebGL2 is required to render the Mandelbrot set.";
+    errorDisplay.style.display = "block";
     throw new Error("WebGL2 not supported");
 }
 
@@ -59,6 +70,7 @@ out vec4 FragColor;
 uniform vec2 iResolution;
 uniform vec4 center_df;   // x.hi, x.lo, y.hi, y.lo
 uniform float zoom;
+uniform bool useDouble;
 uniform int maxIter;
 
 /* ===== double-float ===== */
@@ -92,7 +104,7 @@ float df_len2(df x, df y) {
 
 /* ===== Mandelbrot ===== */
 
-int mandelbrot(df cx, df cy, int maxIter, out df zx, out df zy) {
+int mandelbrot_df(df cx, df cy, int maxIter, out df zx, out df zy) {
     zx = df_make(0.0);
     zy = df_make(0.0);
 
@@ -108,6 +120,20 @@ int mandelbrot(df cx, df cy, int maxIter, out df zx, out df zy) {
         zy = y;
 
         if (df_len2(zx, zy) > 4.0) break;
+    }
+    return i;
+}
+
+int mandelbrot_f(vec2 c, int maxIter) {
+    vec2 z = vec2(0.0);
+    int i;
+    for (i = 0; i < maxIter; i++) {
+        vec2 z2 = vec2(
+            z.x * z.x - z.y * z.y,
+            2.0 * z.x * z.y
+        );
+        z = z2 + c;
+        if (dot(z, z) > 4.0) break;
     }
     return i;
 }
@@ -135,24 +161,36 @@ void main() {
 
     float scale = 1.0 / zoom;
 
-    df cx = df_add(
-        df(center_df.x, center_df.y),
-        df_make(uv.x * scale)
-    );
-    df cy = df_add(
-        df(center_df.z, center_df.w),
-        df_make(uv.y * scale)
-    );
+    int iterLimit = maxIter;
+    float t = 0.0;
 
-    df zx;
-    df zy;
-    int iter = mandelbrot(cx, cy, maxIter, zx, zy);
-    float t = float(iter) / float(maxIter);
+    if (useDouble) {
+        df cx = df_add(
+            df(center_df.x, center_df.y),
+            df_make(uv.x * scale)
+        );
+        df cy = df_add(
+            df(center_df.z, center_df.w),
+            df_make(uv.y * scale)
+        );
 
-    if (iter < maxIter) {
-        float mag2 = df_len2(zx, zy);
-        float smooth = log2(log2(max(mag2, 1.000001)));
-        t = (float(iter) + 1.0 - smooth) / float(maxIter);
+        df zx;
+        df zy;
+        int iter = mandelbrot_df(cx, cy, iterLimit, zx, zy);
+        t = float(iter) / float(iterLimit);
+
+        if (iter < iterLimit) {
+            float mag2 = df_len2(zx, zy);
+            float smooth = log2(log2(max(mag2, 1.000001)));
+            t = (float(iter) + 1.0 - smooth) / float(iterLimit);
+        }
+    } else {
+        vec2 c = vec2(
+            center_df.x + uv.x * scale,
+            center_df.z + uv.y * scale
+        );
+        int iter = mandelbrot_f(c, iterLimit);
+        t = float(iter) / float(iterLimit);
     }
     FragColor = vec4(palette(t), 1.0);
 }
@@ -193,6 +231,7 @@ gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 const resLoc = gl.getUniformLocation(prog, "iResolution");
 const centerLoc = gl.getUniformLocation(prog, "center_df");
 const zoomLoc = gl.getUniformLocation(prog, "zoom");
+const useDoubleLoc = gl.getUniformLocation(prog, "useDouble");
 const maxIterLoc = gl.getUniformLocation(prog, "maxIter");
 
 /* ===== Interaction ===== */
@@ -246,6 +285,7 @@ function render() {
     gl.uniform2f(resLoc, canvas.width, canvas.height);
     gl.uniform4f(centerLoc, center.x, 0.0, center.y, 0.0);
     gl.uniform1f(zoomLoc, zoom);
+    gl.uniform1i(useDoubleLoc, zoom > 1000.0 ? 1 : 0);
     const iter = Math.min(2000, Math.max(200, Math.floor(200 + 300 * Math.log2(zoom))));
     gl.uniform1i(maxIterLoc, iter);
     gl.drawArrays(gl.TRIANGLES, 0, 6);

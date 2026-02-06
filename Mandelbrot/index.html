@@ -2,6 +2,16 @@
 <html>
 <body style="margin:0; background:black; overflow:hidden;">
 <canvas id="canvas"></canvas>
+<div id="errorDisplay" style="
+    position:absolute;
+    inset:10px 10px auto 10px;
+    color:white;
+    font-family:monospace;
+    background:rgba(128,0,0,0.7);
+    padding:6px 10px;
+    border-radius:4px;
+    display:none;
+"></div>
 <div id="zoomDisplay" style="
     position:absolute;
     top:10px;
@@ -17,19 +27,26 @@
 const canvas = document.getElementById("canvas");
 const gl = canvas.getContext("webgl2");
 const zoomDisplay = document.getElementById("zoomDisplay");
+const errorDisplay = document.getElementById("errorDisplay");
 
 let center = { x: -0.5, y: 0.0 };
 let zoom = 1.5;
+
+if (!gl) {
+    errorDisplay.style.display = "block";
+    errorDisplay.textContent = "WebGL2 not supported. Please use a WebGL2-capable browser.";
+    throw new Error("WebGL2 not supported.");
+}
 
 /* ===== Resize ===== */
 
 function resize() {
     const dpr = window.devicePixelRatio || 1;
     const size = Math.min(innerWidth, innerHeight);
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
-    canvas.style.width = size + "px";
-    canvas.style.height = size + "px";
+    canvas.width = Math.max(1, Math.floor(size * dpr));
+    canvas.height = Math.max(1, Math.floor(size * dpr));
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
     gl.viewport(0, 0, canvas.width, canvas.height);
 }
 addEventListener("resize", resize);
@@ -207,7 +224,7 @@ function zoomAt(x, y, f) {
 let drag = false, lx, ly;
 
 canvas.onmousedown = e => { drag = true; lx = e.clientX; ly = e.clientY; };
-onmouseup = () => drag = false;
+window.addEventListener("mouseup", () => { drag = false; });
 
 canvas.onmousemove = e => {
     if (!drag) return;
@@ -219,10 +236,11 @@ canvas.onmousemove = e => {
     ly = e.clientY;
 };
 
-canvas.onwheel = e => {
+canvas.addEventListener("wheel", e => {
     e.preventDefault();
-    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.2 : 0.8);
-};
+    const zoomFactor = e.deltaY < 0 ? 1.2 : 0.8;
+    zoomAt(e.clientX, e.clientY, zoomFactor);
+}, { passive: false });
 
 /* ===== Render ===== */
 
